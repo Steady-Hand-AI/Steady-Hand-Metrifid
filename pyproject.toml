@@ -34,7 +34,7 @@ classifiers = [
   "Topic :: Software Development :: Testing",
   "Typing :: Typed",
 ]
-dependencies = ["mujoco==3.10.0.*", "numpy>=1.26"]
+dependencies = ["mujoco>=3.10.0,<3.11.1", "numpy>=1.26"]
 
 [project.urls]
 Homepage = "https://github.com/Steady-Hand-AI/Steady-Hand-Metrifid"
