@@ -1,0 +1,17 @@
+<!-- Same model, different source text: reordered attributes, added comments and whitespace.
+     MuJoCo compiles both to the same artifact, so `certify` returns exit 0. -->
+<mujoco model="arm">
+  <option timestep="0.002"/>
+
+  <worldbody>
+    <!-- one link driven by one hinge -->
+    <body pos="0 0 1" name="link">
+      <geom size="0.04" name="shaft" mass="1.5" fromto="0 0 0 0 0 -0.4" type="capsule"/>
+      <joint axis="0 1 0" name="elbow" damping="0.1" type="hinge"/>
+    </body>
+  </worldbody>
+
+  <actuator>
+    <motor gear="20" joint="elbow"/>
+  </actuator>
+</mujoco>

@@ -1,0 +1,258 @@
+name: publish
+
+on:
+  push:
+    tags:
+      - "0.2.1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  RELEASE_VERSION: "0.2.1"
+  RELEASE_ARTIFACT: metrifid-0.2.1-distributions
+
+jobs:
+  build-and-validate:
+    name: build and validate release artifacts
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.12"
+
+      - name: Verify tag, version, and clean source
+        run: |
+          test "${GITHUB_REF_NAME}" = "${RELEASE_VERSION}"
+          test "$(python -c 'from pathlib import Path; ns={}; exec(Path("src/metrifid/version.py").read_text(), ns); print(ns["__version__"])')" = "${RELEASE_VERSION}"
+          test -z "$(git status --porcelain)"
+
+      - name: Install constrained release toolchain
+        run: |
+          python -m pip install -c .github/quality-constraints.txt \
+            build editables hatchling hypothesis mypy numpy pytest pytest-randomly ruff twine \
+            "mujoco==3.10.0.*"
+          python -m pip install --no-build-isolation --no-deps --editable .
+
+      - name: Quality gates
+        run: |
+          python -m ruff check .
+          python -m ruff format --check .
+          python -m mypy --strict src/metrifid
+
+      - name: Build direct distributions
+        run: |
+          rm -rf dist build
+          python -m build
+          python -m twine check --strict dist/*
+          test "$(find dist -maxdepth 1 -name '*.whl' | wc -l | tr -d ' ')" = "1"
+          test "$(find dist -maxdepth 1 -name '*.tar.gz' | wc -l | tr -d ' ')" = "1"
+
+      - name: Test noneditable wheel
+        run: |
+          python -m venv .release-wheel-venv
+          .release-wheel-venv/bin/python -m pip install dist/metrifid-0.2.1-py3-none-any.whl
+          .release-wheel-venv/bin/python -m pip install -c .github/quality-constraints.txt \
+            editables hatchling hypothesis mypy pytest pytest-randomly
+          .release-wheel-venv/bin/python -m pip check
+          .release-wheel-venv/bin/python -m pytest -q --junitxml=release-junit.xml tests
+          .release-wheel-venv/bin/python tools/mjb_characterization.py | tee mjb-characterization.log
+          mkdir -p "$RUNNER_TEMP/metrifid-demo"
+          cd "$RUNNER_TEMP/metrifid-demo"
+          "$GITHUB_WORKSPACE/.release-wheel-venv/bin/python" -m metrifid.demo | tee "$GITHUB_WORKSPACE/demo.log"
+
+      - name: Rebuild wheel from source distribution
+        run: |
+          mkdir -p sdist-extract sdist-wheel
+          tar -xzf dist/metrifid-0.2.1.tar.gz -C sdist-extract
+          python -m build --wheel --outdir sdist-wheel sdist-extract/metrifid-0.2.1
+          cmp dist/metrifid-0.2.1-py3-none-any.whl sdist-wheel/metrifid-0.2.1-py3-none-any.whl
+
+      - name: Generate checksums and release evidence
+        run: |
+          sha256sum dist/metrifid-0.2.1-py3-none-any.whl dist/metrifid-0.2.1.tar.gz > SHA256SUMS.txt
+          python - <<'PY'
+          import hashlib, json, pathlib, xml.etree.ElementTree as ET
+          root = ET.parse('release-junit.xml').getroot()
+          suites = [root] if root.tag == 'testsuite' else list(root.findall('.//testsuite'))
+          totals = {name: sum(int(suite.attrib.get(name, '0')) for suite in suites) for name in ('tests', 'failures', 'errors', 'skipped')}
+          evidence = {
+              'schema_version': 1,
+              'project': 'metrifid',
+              'version': '0.2.1',
+              'commit': '${{ github.sha }}',
+              'tag': '${{ github.ref_name }}',
+              'workflow_sha256': hashlib.sha256(pathlib.Path('.github/workflows/publish.yml').read_bytes()).hexdigest(),
+              'artifacts': [],
+              'tests': totals,
+              'mjb_characterization_passed': 'all 29 checks passed' in pathlib.Path('mjb-characterization.log').read_text(encoding='utf-8'),
+              'demo_passed': 'Metrifid demo passed' in pathlib.Path('demo.log').read_text(encoding='utf-8'),
+          }
+          for path in sorted(pathlib.Path('dist').iterdir()):
+              evidence['artifacts'].append({
+                  'filename': path.name,
+                  'size': path.stat().st_size,
+                  'sha256': hashlib.sha256(path.read_bytes()).hexdigest(),
+              })
+          assert evidence['tests']['tests'] > 0
+          assert evidence['tests']['failures'] == 0 and evidence['tests']['errors'] == 0
+          assert evidence['mjb_characterization_passed'] and evidence['demo_passed']
+          pathlib.Path('release-evidence.json').write_text(json.dumps(evidence, indent=2, sort_keys=True) + '\n', encoding='utf-8')
+          PY
+          sed -n '/^## 0.2.1/,/^## 0.2.0/p' CHANGELOG.md | sed '$d' > RELEASE_NOTES.md
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: ${{ env.RELEASE_ARTIFACT }}
+          path: |
+            dist/
+            SHA256SUMS.txt
+            release-evidence.json
+            RELEASE_NOTES.md
+            release-junit.xml
+            mjb-characterization.log
+            demo.log
+          if-no-files-found: error
+
+  publish-testpypi:
+    name: publish exact artifacts to TestPyPI
+    needs: build-and-validate
+    runs-on: ubuntu-24.04
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/p/metrifid
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: ${{ env.RELEASE_ARTIFACT }}
+          path: release-artifacts
+      - name: Publish to TestPyPI
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+        with:
+          packages-dir: release-artifacts/dist/
+          repository-url: https://test.pypi.org/legacy/
+
+  verify-testpypi:
+    name: verify TestPyPI publication
+    needs: publish-testpypi
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: ${{ env.RELEASE_ARTIFACT }}
+          path: release-artifacts
+      - name: Verify TestPyPI hashes and installation
+        run: |
+          python - <<'PY'
+          import hashlib, json, pathlib, time, urllib.request
+          expected = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in pathlib.Path('release-artifacts/dist').iterdir()}
+          url = 'https://test.pypi.org/pypi/metrifid/0.2.1/json'
+          for _ in range(30):
+              try:
+                  data = json.load(urllib.request.urlopen(url, timeout=20))
+                  observed = {row['filename']: row['digests']['sha256'] for row in data['urls']}
+                  if observed == expected:
+                      break
+              except Exception:
+                  pass
+              time.sleep(10)
+          else:
+              raise SystemExit('TestPyPI artifacts or hashes did not match')
+          PY
+          mkdir testpypi-download
+          python -m pip download --no-deps --only-binary=:all: --index-url https://test.pypi.org/simple/ --dest testpypi-download metrifid==0.2.1
+          cmp testpypi-download/metrifid-0.2.1-py3-none-any.whl release-artifacts/dist/metrifid-0.2.1-py3-none-any.whl
+          python -m venv testpypi-venv
+          testpypi-venv/bin/python -m pip install testpypi-download/metrifid-0.2.1-py3-none-any.whl
+          testpypi-venv/bin/metrifid --help
+          testpypi-venv/bin/metrifid certify --help
+          testpypi-venv/bin/metrifid compare --help
+          testpypi-venv/bin/metrifid audit-timestep --help
+          testpypi-venv/bin/python -c 'import metrifid; assert metrifid.__version__ == "0.2.1"'
+          mkdir testpypi-demo && cd testpypi-demo
+          ../testpypi-venv/bin/python -m metrifid.demo
+
+  publish-pypi:
+    name: publish the same artifacts to PyPI
+    needs: verify-testpypi
+    runs-on: ubuntu-24.04
+    environment:
+      name: pypi
+      url: https://pypi.org/p/metrifid
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: ${{ env.RELEASE_ARTIFACT }}
+          path: release-artifacts
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+        with:
+          packages-dir: release-artifacts/dist/
+
+  verify-pypi-and-release:
+    name: verify PyPI and create GitHub release
+    needs: publish-pypi
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: ${{ env.RELEASE_ARTIFACT }}
+          path: release-artifacts
+      - name: Verify production PyPI hashes and anonymous installation
+        run: |
+          python - <<'PY'
+          import hashlib, json, pathlib, time, urllib.request
+          expected = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in pathlib.Path('release-artifacts/dist').iterdir()}
+          url = 'https://pypi.org/pypi/metrifid/0.2.1/json'
+          for _ in range(30):
+              try:
+                  data = json.load(urllib.request.urlopen(url, timeout=20))
+                  observed = {row['filename']: row['digests']['sha256'] for row in data['urls']}
+                  if observed == expected:
+                      break
+              except Exception:
+                  pass
+              time.sleep(10)
+          else:
+              raise SystemExit('PyPI artifacts or hashes did not match')
+          PY
+          python -m venv public-venv
+          public-venv/bin/python -m pip install --no-cache-dir metrifid==0.2.1
+          public-venv/bin/metrifid --help
+          public-venv/bin/metrifid certify --help
+          public-venv/bin/metrifid compare --help
+          public-venv/bin/metrifid audit-timestep --help
+          public-venv/bin/python -c 'import metrifid; assert metrifid.__version__ == "0.2.1"'
+          mkdir public-demo && cd public-demo
+          ../public-venv/bin/python -m metrifid.demo
+      - name: Create GitHub release from the verified artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create 0.2.1 \
+            release-artifacts/dist/metrifid-0.2.1-py3-none-any.whl \
+            release-artifacts/dist/metrifid-0.2.1.tar.gz \
+            release-artifacts/SHA256SUMS.txt \
+            release-artifacts/release-evidence.json \
+            --title "Metrifid 0.2.1" \
+            --notes-file release-artifacts/RELEASE_NOTES.md

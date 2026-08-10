@@ -1,0 +1,150 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = "metrifid"
+dynamic = ["version"]
+description = "Certify that two MuJoCo model sources compile to identical artifacts, audit timesteps, and compare simulation traces"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+authors = [{ name = "Volodymyr Barylyak" }]
+maintainers = [{ name = "Volodymyr Barylyak" }]
+keywords = [
+  "mujoco",
+  "robotics",
+  "simulation",
+  "model verification",
+  "reproducibility",
+]
+classifiers = [
+  "Intended Audience :: Developers",
+  "Intended Audience :: Science/Research",
+  "Operating System :: POSIX :: Linux",
+  "Operating System :: MacOS",
+  "Development Status :: 3 - Alpha",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Topic :: Scientific/Engineering",
+  "Topic :: Software Development :: Testing",
+  "Typing :: Typed",
+]
+dependencies = ["mujoco==3.10.0.*", "numpy>=1.26"]
+
+[project.urls]
+Homepage = "https://github.com/Steady-Hand-AI/Steady-Hand-Metrifid"
+Repository = "https://github.com/Steady-Hand-AI/Steady-Hand-Metrifid"
+Issues = "https://github.com/Steady-Hand-AI/Steady-Hand-Metrifid/issues"
+Documentation = "https://github.com/Steady-Hand-AI/Steady-Hand-Metrifid/blob/0.2.1/docs/getting_started.md"
+Changelog = "https://github.com/Steady-Hand-AI/Steady-Hand-Metrifid/blob/0.2.1/CHANGELOG.md"
+Security = "https://github.com/Steady-Hand-AI/Steady-Hand-Metrifid/security/advisories/new"
+
+[project.scripts]
+metrifid = "metrifid.cli:main"
+
+[project.optional-dependencies]
+# Development/CI extra only; the runtime dependencies above are unchanged. Minimum-only bounds are
+# used deliberately: an upper bound is added only for a reproduced incompatibility. NumPy is not
+# listed here because it is already a runtime dependency with no ceiling. The build backend and its
+# editable helper are listed because the execution-identity tests build an editable install with
+# --no-build-isolation, which does not provision them.
+dev = [
+  "build>=1.2",
+  "editables>=0.5",
+  "hatchling>=1.27",
+  "hypothesis>=6.100",
+  "mypy>=1.11",
+  "pytest>=8.3",
+  "pytest-randomly>=3.15",
+  "ruff>=0.9",
+  "twine>=5.1",
+]
+
+[tool.hatch.version]
+path = "src/metrifid/version.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/metrifid"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+  "/.gitignore",
+  "/.pre-commit-config.yaml",
+  "/.github/quality-constraints.txt",
+  "/CHANGELOG.md",
+  "/CODE_OF_CONDUCT.md",
+  "/CONTRIBUTING.md",
+  "/DCO",
+  "/LICENSE",
+  "/NOTICE",
+  "/README.md",
+  "/SECURITY.md",
+  "/docs",
+  "/examples",
+  "/pyproject.toml",
+  "/src",
+  "/tests",
+  "/tools/mjb_characterization.py",
+]
+
+[tool.pytest.ini_options]
+addopts = "--import-mode=importlib --strict-config --strict-markers -ra"
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+# tools/mjb_characterization.py is a frozen release-validation harness whose bytes are fixed
+# by the compatibility policy, so it is checked by execution rather than by lint/format.
+extend-exclude = ["tools/mjb_characterization.py"]
+
+[tool.ruff.lint]
+# The formatter owns physical line wrapping; long immutable registry rows remain clearer intact.
+# Pytest exception-message specificity is tested semantically, so PT011/PT012 are intentionally off.
+# Public __all__ order follows the frozen dispatch rather than alphabetical order.
+ignore = ["E501", "PT011", "PT012", "RUF022"]
+select = [
+  "E",
+  "F",
+  "I",
+  "UP",
+  "B",
+  "C4",
+  "C90",
+  "D",
+  "PT",
+  "PTH",
+  "RUF",
+  "T20",
+]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 12
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.per-file-ignores]
+# The runnable example prints its results; that is what it is for.
+"examples/**" = ["T20"]
+# The bundled first-use demonstration is a console program: printing its two statuses and its
+# final line is the entire user-visible output contract.
+"src/metrifid/demo.py" = ["T20"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "lf"
+
+[tool.mypy]
+python_version = "3.11"
+files = ["src"]
+strict = true
+warn_unreachable = true
+show_error_codes = true
+pretty = true

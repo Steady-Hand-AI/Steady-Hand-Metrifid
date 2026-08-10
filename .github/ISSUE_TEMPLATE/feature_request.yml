@@ -1,0 +1,57 @@
+name: Feature request
+description: Propose a capability for metrifid.
+title: "[Feature]: "
+body:
+  - type: markdown
+    attributes:
+      value: >-
+        Do not attach secrets, credentials, proprietary robot assets, or confidential model files.
+        Please describe the problem you hit before the solution you have in mind.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: User problem
+      description: Describe the recurring engineering job and why the current workflow is insufficient.
+    validations:
+      required: true
+
+  - type: textarea
+    id: current-workaround
+    attributes:
+      label: Current workaround
+      description: Explain the strongest practical alternative you use today.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposed-outcome
+    attributes:
+      label: Proposed outcome
+      description: Describe the observable result, not an implementation mandate.
+    validations:
+      required: true
+
+  - type: textarea
+    id: claim-boundary
+    attributes:
+      label: Claim boundary
+      description: State what the proposed capability must not claim or decide.
+    validations:
+      required: true
+
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Reproducible evidence
+      description: Provide sanitized examples, frequency, and measurable impact when available.
+
+  - type: checkboxes
+    id: confirmations
+    attributes:
+      label: Confirmations
+      options:
+        - label: I searched existing issues for a similar request.
+          required: true
+        - label: I removed secrets and proprietary robot assets from this request.
+          required: true

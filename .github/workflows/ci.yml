@@ -1,0 +1,567 @@
+name: ci
+
+# Build one wheel once. Every blocking compatibility lane installs those exact bytes noneditably.
+# MJB digests are lane-local evidence and are never compared across runtimes.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  WHEEL_ARTIFACT: metrifid-distributions
+
+jobs:
+  build_and_quality:
+    name: build and quality (linux, python 3.11)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.11"
+
+      - name: Install the deterministic build and quality toolchain
+        run: |
+          python -m pip install -c .github/quality-constraints.txt \
+            build editables hatchling hypothesis mypy numpy pytest pytest-randomly ruff twine \
+            "mujoco==3.10.0.*"
+          python -m pip install --no-build-isolation --no-deps --editable .
+
+      - name: Ruff check
+        run: python -m ruff check .
+
+      - name: Ruff format check
+        run: python -m ruff format --check .
+
+      - name: MyPy strict
+        run: python -m mypy --strict src/metrifid
+
+      - name: Build one direct wheel and one direct sdist through isolated PEP 517
+        run: python -m build
+
+      - name: Twine check
+        run: python -m twine check dist/*
+
+      - name: Record the wheel identity
+        run: |
+          python - <<'PY'
+          import hashlib
+          import pathlib
+
+          wheels = sorted(pathlib.Path("dist").glob("*.whl"))
+          sdists = sorted(pathlib.Path("dist").glob("*.tar.gz"))
+          assert len(wheels) == 1 and len(sdists) == 1, (wheels, sdists)
+          digest = hashlib.sha256(wheels[0].read_bytes()).hexdigest()
+          pathlib.Path("wheel.sha256").write_text(digest + "\n", encoding="utf-8")
+          print("wheel", wheels[0].name, digest)
+          PY
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: ${{ env.WHEEL_ARTIFACT }}
+          path: |
+            dist/
+            wheel.sha256
+          if-no-files-found: error
+
+  matrix_lane:
+    name: ${{ matrix.id }}
+    needs: build_and_quality
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: linux_x64_py311
+            runner: ubuntu-24.04
+            python: "3.11"
+          - id: linux_x64_py312
+            runner: ubuntu-24.04
+            python: "3.12"
+          - id: linux_x64_py313
+            runner: ubuntu-24.04
+            python: "3.13"
+          - id: linux_x64_py314
+            runner: ubuntu-24.04
+            python: "3.14"
+          - id: macos_arm64_py312
+            runner: macos-15
+            python: "3.12"
+          - id: macos_arm64_py314
+            runner: macos-15
+            python: "3.14"
+          - id: macos_x64_py312
+            runner: macos-15-intel
+            python: "3.12"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: ${{ matrix.python }}
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: ${{ env.WHEEL_ARTIFACT }}
+          path: release-artifacts
+
+      - name: Verify and install the exact built wheel with the normal resolver
+        run: |
+          python - <<'PY'
+          import hashlib
+          import pathlib
+
+          wheels = sorted(pathlib.Path("release-artifacts/dist").glob("*.whl"))
+          assert len(wheels) == 1, wheels
+          expected = pathlib.Path("release-artifacts/wheel.sha256").read_text(encoding="utf-8").strip()
+          actual = hashlib.sha256(wheels[0].read_bytes()).hexdigest()
+          assert actual == expected, (actual, expected)
+          PY
+          python -m pip install "$(ls release-artifacts/dist/*.whl)"
+          python -m pip install -c .github/quality-constraints.txt \
+            editables hatchling hypothesis mypy pytest pytest-randomly
+
+      - name: Lane runtime identity
+        run: python -m pip check
+
+      - name: Create lane evidence directory
+        run: mkdir -p lane-evidence
+
+      - name: Installed-wheel test suite
+        run: python -m pytest -q --junitxml=lane-evidence/full.xml tests
+
+      - name: Fixed randomized installed-wheel suite
+        if: matrix.id == 'linux_x64_py312'
+        run: python -m pytest -q --randomly-seed=17 --junitxml=lane-evidence/randomized.xml tests
+
+      - name: Bundled first-use example
+        run: |
+          python examples/certify/run_example.py > lane-evidence/example.log
+          cat lane-evidence/example.log
+
+      - name: CLI help smoke
+        run: |
+          {
+            metrifid --help
+            metrifid certify --help
+            metrifid compare --help
+            metrifid audit-timestep --help
+          } > lane-evidence/cli_help.log
+          cat lane-evidence/cli_help.log
+
+      - name: Wheel-only demo from an empty directory
+        run: |
+          mkdir -p "$RUNNER_TEMP/demo-empty"
+          cd "$RUNNER_TEMP/demo-empty"
+          python -m metrifid.demo | tee "$GITHUB_WORKSPACE/lane-evidence/demo.log"
+
+      - name: SDK examples from a copied directory
+        run: |
+          rm -rf "$RUNNER_TEMP/sdk-copy" && mkdir -p "$RUNNER_TEMP/sdk-copy"
+          cp examples/sdk/*.py "$RUNNER_TEMP/sdk-copy/"
+          cd "$RUNNER_TEMP/sdk-copy"
+          for script in certify_api.py compare_api.py audit_api.py; do
+            python "$script"
+          done | tee "$GITHUB_WORKSPACE/lane-evidence/sdk_examples.log"
+
+      - name: Source-checkout comparison example
+        run: |
+          rm -rf "$RUNNER_TEMP/compare-copy" && mkdir -p "$RUNNER_TEMP/compare-copy"
+          cp -R examples/compare/. "$RUNNER_TEMP/compare-copy/"
+          cd "$RUNNER_TEMP/compare-copy"
+          python prepare_workload.py
+          metrifid compare comparison.json | tee "$GITHUB_WORKSPACE/lane-evidence/compare_example.log"
+
+      - name: MJB characterization (29 checks, lane-local)
+        run: |
+          python tools/mjb_characterization.py > lane-evidence/mjb.log
+          cat lane-evidence/mjb.log
+
+      - name: Record blocking lane evidence
+        run: |
+          cp release-artifacts/wheel.sha256 lane-evidence/wheel.sha256
+          printf '%s\n' '${{ matrix.id }}' > lane-evidence/lane_id.txt
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: lane-${{ matrix.id }}
+          path: lane-evidence/
+          if-no-files-found: error
+
+  minimum_dependency_lane:
+    name: linux_x64_py311_numpy_min
+    needs: build_and_quality
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.11"
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: ${{ env.WHEEL_ARTIFACT }}
+          path: release-artifacts
+
+      - name: Verify and install the declared minimum dependency profile
+        run: |
+          python - <<'PY'
+          import hashlib
+          import pathlib
+
+          wheels = sorted(pathlib.Path("release-artifacts/dist").glob("*.whl"))
+          assert len(wheels) == 1, wheels
+          expected = pathlib.Path("release-artifacts/wheel.sha256").read_text(encoding="utf-8").strip()
+          actual = hashlib.sha256(wheels[0].read_bytes()).hexdigest()
+          assert actual == expected, (actual, expected)
+          PY
+          python -m pip install "numpy==1.26.4" "mujoco==3.10.0.*"
+          python -m pip install --no-deps "$(ls release-artifacts/dist/*.whl)"
+          python -m pip install -c .github/quality-constraints.txt \
+            editables hatchling hypothesis mypy pytest pytest-randomly
+
+      - name: Lane runtime identity
+        run: python -m pip check
+
+      - name: Create lane evidence directory
+        run: mkdir -p lane-evidence
+
+      - name: Installed-wheel test suite
+        run: python -m pytest -q --junitxml=lane-evidence/full.xml tests
+
+      - name: Bundled first-use example
+        run: |
+          python examples/certify/run_example.py > lane-evidence/example.log
+          cat lane-evidence/example.log
+
+      - name: CLI help smoke
+        run: |
+          {
+            metrifid --help
+            metrifid certify --help
+            metrifid compare --help
+            metrifid audit-timestep --help
+          } > lane-evidence/cli_help.log
+          cat lane-evidence/cli_help.log
+
+      - name: Wheel-only demo from an empty directory
+        run: |
+          mkdir -p "$RUNNER_TEMP/demo-empty"
+          cd "$RUNNER_TEMP/demo-empty"
+          python -m metrifid.demo | tee "$GITHUB_WORKSPACE/lane-evidence/demo.log"
+
+      - name: SDK examples from a copied directory
+        run: |
+          rm -rf "$RUNNER_TEMP/sdk-copy" && mkdir -p "$RUNNER_TEMP/sdk-copy"
+          cp examples/sdk/*.py "$RUNNER_TEMP/sdk-copy/"
+          cd "$RUNNER_TEMP/sdk-copy"
+          for script in certify_api.py compare_api.py audit_api.py; do
+            python "$script"
+          done | tee "$GITHUB_WORKSPACE/lane-evidence/sdk_examples.log"
+
+      - name: Source-checkout comparison example
+        run: |
+          rm -rf "$RUNNER_TEMP/compare-copy" && mkdir -p "$RUNNER_TEMP/compare-copy"
+          cp -R examples/compare/. "$RUNNER_TEMP/compare-copy/"
+          cd "$RUNNER_TEMP/compare-copy"
+          python prepare_workload.py
+          metrifid compare comparison.json | tee "$GITHUB_WORKSPACE/lane-evidence/compare_example.log"
+
+      - name: MJB characterization (29 checks, lane-local)
+        run: |
+          python tools/mjb_characterization.py > lane-evidence/mjb.log
+          cat lane-evidence/mjb.log
+
+      - name: Record blocking lane evidence
+        run: |
+          cp release-artifacts/wheel.sha256 lane-evidence/wheel.sha256
+          printf '%s\n' 'linux_x64_py311_numpy_min' > lane-evidence/lane_id.txt
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: lane-linux_x64_py311_numpy_min
+          path: lane-evidence/
+          if-no-files-found: error
+
+  sdist_install_lane:
+    name: direct sdist installation
+    needs: build_and_quality
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.12"
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: ${{ env.WHEEL_ARTIFACT }}
+          path: release-artifacts
+
+      - name: Install the direct sdist into a clean environment
+        run: |
+          python -m pip install -c .github/quality-constraints.txt \
+            editables hatchling hypothesis mypy pytest pytest-randomly numpy "mujoco==3.10.0.*"
+          python -m pip install "$(ls release-artifacts/dist/*.tar.gz)"
+
+      - name: Environment identity
+        run: |
+          mkdir -p sdist-evidence
+          python -m pip check
+          python -c "import metrifid, sys; print(metrifid.__version__, sys.version)"
+
+      - name: Complete suite against the sdist installation
+        run: python -m pytest -q --junitxml=sdist-evidence/sdist_install_full.xml tests
+
+      - name: MJB characterization in the sdist environment
+        run: |
+          python tools/mjb_characterization.py > sdist-evidence/mjb_sdist.log
+          cat sdist-evidence/mjb_sdist.log
+
+      - name: Wheel-only demo and SDK examples from the sdist installation
+        run: |
+          mkdir -p "$RUNNER_TEMP/sdist-demo"
+          cd "$RUNNER_TEMP/sdist-demo"
+          python -m metrifid.demo | tee "$GITHUB_WORKSPACE/sdist-evidence/demo.log"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: sdist-install-evidence
+          path: sdist-evidence/
+          if-no-files-found: error
+
+  distribution_equivalence:
+    name: direct wheel versus wheel rebuilt from sdist
+    needs: build_and_quality
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.12"
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: ${{ env.WHEEL_ARTIFACT }}
+          path: release-artifacts
+
+      - name: Rebuild a wheel from the extracted sdist through isolated PEP 517
+        run: |
+          python -m pip install -c .github/quality-constraints.txt build
+          mkdir -p equivalence/extracted
+          tar -xzf "$(ls release-artifacts/dist/*.tar.gz)" -C equivalence/extracted
+          python -m build --wheel --outdir equivalence/from_sdist \
+            "$(ls -d equivalence/extracted/*/)"
+
+      - name: Compare the two wheels semantically
+        run: |
+          python - <<'PY'
+          import json, pathlib, zipfile
+          from email.parser import BytesParser
+
+          direct = sorted(pathlib.Path("release-artifacts/dist").glob("*.whl"))[0]
+          rebuilt = sorted(pathlib.Path("equivalence/from_sdist").glob("*.whl"))[0]
+
+          def package(path):
+              with zipfile.ZipFile(path) as archive:
+                  return {n: archive.read(n) for n in archive.namelist()
+                          if n.startswith("metrifid/")}
+
+          def dist_info(path, suffix):
+              with zipfile.ZipFile(path) as archive:
+                  name = next(n for n in archive.namelist()
+                              if n.endswith(f".dist-info/{suffix}"))
+                  return archive.read(name)
+
+          a, b = package(direct), package(rebuilt)
+          report = {
+              "direct_and_rebuilt_package_members_equal": sorted(a) == sorted(b),
+              "direct_and_rebuilt_package_bytes_equal": a == b,
+              "entry_points_equal":
+                  dist_info(direct, "entry_points.txt") == dist_info(rebuilt, "entry_points.txt"),
+              "py_typed_equal": a.get("metrifid/py.typed") == b.get("metrifid/py.typed"),
+          }
+          fields = ("Name", "Version", "Summary", "Requires-Python", "License-Expression")
+          ma = BytesParser().parsebytes(dist_info(direct, "METADATA"))
+          mb = BytesParser().parsebytes(dist_info(rebuilt, "METADATA"))
+          report["metadata_semantically_equal"] = (
+              all(ma.get(f) == mb.get(f) for f in fields)
+              and sorted(ma.get_all("Requires-Dist") or []) == sorted(mb.get_all("Requires-Dist") or [])
+          )
+          pathlib.Path("equivalence/distribution_equivalence.json").write_text(
+              json.dumps(report, indent=2) + "\n", encoding="utf-8")
+          print(json.dumps(report, indent=2))
+          assert all(report.values()), report
+          PY
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: distribution-equivalence
+          path: equivalence/
+          if-no-files-found: error
+
+  release_matrix_summary:
+    name: release compatibility summary
+    needs: [matrix_lane, minimum_dependency_lane, sdist_install_lane, distribution_equivalence]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          pattern: lane-*
+          path: lane-artifacts
+          merge-multiple: false
+
+      - name: Verify one wheel and one exact test contract across all blocking lanes
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
+
+          expected_lanes = {
+              "linux_x64_py311",
+              "linux_x64_py312",
+              "linux_x64_py313",
+              "linux_x64_py314",
+              "linux_x64_py311_numpy_min",
+              "macos_arm64_py312",
+              "macos_arm64_py314",
+              "macos_x64_py312",
+          }
+          root = Path("lane-artifacts")
+          lane_dirs = {path.name.removeprefix("lane-"): path for path in root.glob("lane-*") if path.is_dir()}
+          assert set(lane_dirs) == expected_lanes, (set(lane_dirs), expected_lanes)
+
+          def junit_contract(path: Path) -> tuple[set[str], set[str]]:
+              tree = ET.parse(path)
+              cases: set[str] = set()
+              skipped: set[str] = set()
+              for case in tree.iter("testcase"):
+                  identity = f"{case.attrib.get('classname', '')}::{case.attrib.get('name', '')}"
+                  assert identity not in cases, identity
+                  cases.add(identity)
+                  assert case.find("failure") is None, identity
+                  assert case.find("error") is None, identity
+                  if case.find("skipped") is not None:
+                      skipped.add(identity)
+              assert cases, path
+              return cases, skipped
+
+          wheel_digests: set[str] = set()
+          baseline_cases: set[str] | None = None
+          baseline_skips: set[str] | None = None
+          for lane_id in sorted(expected_lanes):
+              directory = lane_dirs[lane_id]
+              assert (directory / "lane_id.txt").read_text(encoding="utf-8").strip() == lane_id
+              digest = (directory / "wheel.sha256").read_text(encoding="utf-8").strip()
+              assert len(digest) == 64 and all(ch in "0123456789abcdef" for ch in digest), digest
+              wheel_digests.add(digest)
+              cases, skipped = junit_contract(directory / "full.xml")
+              if baseline_cases is None:
+                  baseline_cases, baseline_skips = cases, skipped
+              else:
+                  assert cases == baseline_cases, lane_id
+                  assert skipped == baseline_skips, lane_id
+              example = (directory / "example.log").read_text(encoding="utf-8")
+              assert "CERTIFIED_COMPILED_EQUIVALENCE" in example, lane_id
+              assert "NOT_CERTIFIED_COMPILED_DIFFERS" in example, lane_id
+              assert "all 6 checks passed" in example, lane_id
+              mjb = (directory / "mjb.log").read_text(encoding="utf-8")
+              assert "all 29 checks passed" in mjb, lane_id
+              cli_help = (directory / "cli_help.log").read_text(encoding="utf-8")
+              for command in ("certify", "compare", "audit-timestep"):
+                  assert command in cli_help, (lane_id, command)
+              randomized = directory / "randomized.xml"
+              if lane_id == "linux_x64_py312":
+                  random_cases, random_skips = junit_contract(randomized)
+                  assert random_cases == cases
+                  assert random_skips == skipped
+              else:
+                  assert not randomized.exists(), lane_id
+          assert len(wheel_digests) == 1, wheel_digests
+          print("PASS_METRIFID_RELEASE_MATRIX")
+          PY
+
+  experimental_lane:
+    name: linux_arm64_py312 (experimental)
+    needs: build_and_quality
+    runs-on: ubuntu-24.04-arm
+    # The hosted Linux arm64 runner is public preview, so this lane is informative only and
+    # cannot block release readiness until that runner is generally available.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.12"
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: ${{ env.WHEEL_ARTIFACT }}
+          path: release-artifacts
+
+      - name: Verify and install the exact built wheel with the normal resolver
+        run: |
+          python - <<'PY'
+          import hashlib
+          import pathlib
+
+          wheels = sorted(pathlib.Path("release-artifacts/dist").glob("*.whl"))
+          assert len(wheels) == 1, wheels
+          expected = pathlib.Path("release-artifacts/wheel.sha256").read_text(encoding="utf-8").strip()
+          actual = hashlib.sha256(wheels[0].read_bytes()).hexdigest()
+          assert actual == expected, (actual, expected)
+          PY
+          python -m pip install "$(ls release-artifacts/dist/*.whl)"
+          python -m pip install -c .github/quality-constraints.txt \
+            editables hatchling hypothesis mypy pytest pytest-randomly
+
+      - name: Lane runtime identity
+        run: python -m pip check
+
+      - name: Installed-wheel test suite
+        run: python -m pytest -q tests
+
+      - name: Bundled first-use example
+        run: python examples/certify/run_example.py
+
+      - name: CLI help smoke
+        run: |
+          metrifid --help
+          metrifid certify --help
+          metrifid compare --help
+          metrifid audit-timestep --help
+
+      - name: Wheel-only demo from an empty directory
+        run: |
+          mkdir -p "$RUNNER_TEMP/demo-empty"
+          cd "$RUNNER_TEMP/demo-empty"
+          python -m metrifid.demo | tee "$GITHUB_WORKSPACE/lane-evidence/demo.log"
+
+      - name: SDK examples from a copied directory
+        run: |
+          rm -rf "$RUNNER_TEMP/sdk-copy" && mkdir -p "$RUNNER_TEMP/sdk-copy"
+          cp examples/sdk/*.py "$RUNNER_TEMP/sdk-copy/"
+          cd "$RUNNER_TEMP/sdk-copy"
+          for script in certify_api.py compare_api.py audit_api.py; do
+            python "$script"
+          done | tee "$GITHUB_WORKSPACE/lane-evidence/sdk_examples.log"
+
+      - name: Source-checkout comparison example
+        run: |
+          rm -rf "$RUNNER_TEMP/compare-copy" && mkdir -p "$RUNNER_TEMP/compare-copy"
+          cp -R examples/compare/. "$RUNNER_TEMP/compare-copy/"
+          cd "$RUNNER_TEMP/compare-copy"
+          python prepare_workload.py
+          metrifid compare comparison.json | tee "$GITHUB_WORKSPACE/lane-evidence/compare_example.log"
+
+      - name: MJB characterization (29 checks, lane-local)
+        run: python tools/mjb_characterization.py

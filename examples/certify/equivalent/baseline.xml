@@ -1,0 +1,12 @@
+<mujoco model="arm">
+  <option timestep="0.002"/>
+  <worldbody>
+    <body name="link" pos="0 0 1">
+      <geom name="shaft" type="capsule" fromto="0 0 0 0 0 -0.4" size="0.04" mass="1.5"/>
+      <joint name="elbow" type="hinge" axis="0 1 0" damping="0.1"/>
+    </body>
+  </worldbody>
+  <actuator>
+    <motor joint="elbow" gear="20"/>
+  </actuator>
+</mujoco>

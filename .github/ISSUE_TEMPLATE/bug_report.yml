@@ -1,0 +1,70 @@
+name: Bug report
+description: Report a reproducible defect in metrifid.
+title: "[Bug]: "
+body:
+  - type: markdown
+    attributes:
+      value: >-
+        Do not attach secrets, credentials, private keys, proprietary robot assets, or confidential
+        model files. Reduce examples to the smallest shareable case.
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Include metrifid, Python, operating-system, architecture, and tool versions.
+      placeholder: Provide exact version strings and the installation method.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction steps
+      description: Give the shortest deterministic sequence that reproduces the problem.
+      placeholder: List commands and inputs in execution order.
+    validations:
+      required: true
+
+  - type: textarea
+    id: minimal-files
+    attributes:
+      label: Minimal shareable files
+      description: Describe or attach only sanitized, redistributable files needed to reproduce the defect.
+      placeholder: State that no file is needed when commands alone reproduce the problem.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected-behavior
+    attributes:
+      label: Expected behavior
+      description: State the exact result you expected.
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual-behavior
+    attributes:
+      label: Actual behavior
+      description: Include the exact error, status, or output without secrets.
+    validations:
+      required: true
+
+  - type: textarea
+    id: additional-context
+    attributes:
+      label: Additional context
+      description: Add relevant logs or observations after removing confidential information.
+
+  - type: checkboxes
+    id: confirmations
+    attributes:
+      label: Confirmations
+      options:
+        - label: I searched existing issues for the same behavior.
+          required: true
+        - label: I removed secrets and proprietary robot assets from this report.
+          required: true
+        - label: I am using a supported environment, or I am reporting the refusal itself.
+          required: true

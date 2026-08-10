@@ -1,0 +1,12 @@
+<mujoco model="compare_example">
+  <option timestep="0.001"/>
+  <worldbody>
+    <body pos="0 0 1" name="arm">
+      <geom mass="1.50" name="link" size="0.04 0.2" type="capsule"/>
+      <joint axis="0 1 0" name="shoulder" type="hinge"/>
+    </body>
+  </worldbody>
+  <actuator>
+    <motor gear="1" joint="shoulder" name="shoulder_motor"/>
+  </actuator>
+</mujoco>

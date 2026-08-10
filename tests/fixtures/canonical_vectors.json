@@ -1,0 +1,1039 @@
+[
+  {
+    "bits": "0000000000000000",
+    "classification": "positive_zero",
+    "id": "binary64-01",
+    "kind": "binary64",
+    "primitive": {
+      "bits": "0000000000000000",
+      "kind": "ieee754_binary64"
+    }
+  },
+  {
+    "bits": "8000000000000000",
+    "classification": "negative_zero",
+    "id": "binary64-02",
+    "kind": "binary64",
+    "primitive": {
+      "bits": "8000000000000000",
+      "kind": "ieee754_binary64"
+    }
+  },
+  {
+    "bits": "3ff0000000000000",
+    "classification": "finite",
+    "id": "binary64-03",
+    "kind": "binary64",
+    "primitive": {
+      "bits": "3ff0000000000000",
+      "kind": "ieee754_binary64"
+    }
+  },
+  {
+    "bits": "7ff0000000000000",
+    "classification": "positive_infinity",
+    "id": "binary64-04",
+    "kind": "binary64",
+    "primitive": {
+      "bits": "7ff0000000000000",
+      "kind": "ieee754_binary64"
+    }
+  },
+  {
+    "bits": "7ff8000000000042",
+    "classification": "nan",
+    "id": "binary64-05",
+    "kind": "binary64",
+    "primitive": {
+      "bits": "7ff8000000000042",
+      "kind": "ieee754_binary64"
+    }
+  },
+  {
+    "decimal_token": "0",
+    "id": "exact-rational-01",
+    "input": {
+      "denominator": 5,
+      "numerator": 0
+    },
+    "kind": "exact_rational",
+    "normalized": {
+      "denominator": 1,
+      "numerator": 0
+    }
+  },
+  {
+    "decimal_token": "0.5",
+    "id": "exact-rational-02",
+    "input": {
+      "denominator": 4,
+      "numerator": 2
+    },
+    "kind": "exact_rational",
+    "normalized": {
+      "denominator": 2,
+      "numerator": 1
+    }
+  },
+  {
+    "decimal_token": null,
+    "id": "exact-rational-03",
+    "input": {
+      "denominator": 9,
+      "numerator": -3
+    },
+    "kind": "exact_rational",
+    "normalized": {
+      "denominator": 3,
+      "numerator": -1
+    }
+  },
+  {
+    "decimal_token": "0.002",
+    "id": "exact-rational-04",
+    "input": {
+      "denominator": 500,
+      "numerator": 1
+    },
+    "kind": "exact_rational",
+    "normalized": {
+      "denominator": 500,
+      "numerator": 1
+    }
+  },
+  {
+    "decimal_token": "12.34",
+    "id": "exact-rational-05",
+    "input": {
+      "denominator": 100,
+      "numerator": 1234
+    },
+    "kind": "exact_rational",
+    "normalized": {
+      "denominator": 50,
+      "numerator": 617
+    }
+  },
+  {
+    "canonical_utf8": "null",
+    "id": "canonical-json-01",
+    "kind": "canonical_json",
+    "sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+    "value": null
+  },
+  {
+    "canonical_utf8": "true",
+    "id": "canonical-json-02",
+    "kind": "canonical_json",
+    "sha256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b",
+    "value": true
+  },
+  {
+    "canonical_utf8": "17",
+    "id": "canonical-json-03",
+    "kind": "canonical_json",
+    "sha256": "4523540f1504cd17100c4835e85b7eefd49911580f8efff0599a8f283be6b9e3",
+    "value": 17
+  },
+  {
+    "canonical_utf8": "\"é\"",
+    "id": "canonical-json-04",
+    "kind": "canonical_json",
+    "sha256": "f2886017e9c7abacf804b54d64787dce2b611c9544ba21f3affdd126a6e50086",
+    "value": "é"
+  },
+  {
+    "canonical_utf8": "[3,2,1]",
+    "id": "canonical-json-05",
+    "kind": "canonical_json",
+    "sha256": "30c8681f9b840aceee56b737f3b126ae67ec4eb71d2881db831f86014fba016d",
+    "value": [
+      3,
+      2,
+      1
+    ]
+  },
+  {
+    "canonical_utf8": "{\"a\":1,\"b\":2}",
+    "id": "canonical-json-06",
+    "kind": "canonical_json",
+    "sha256": "43258cff783fe7036d8a43033f830adfc60ec037382473548ac742b888292777",
+    "value": {
+      "a": 1,
+      "b": 2
+    }
+  },
+  {
+    "canonical_utf8": "{\"nested\":[{\"a\":\"λ\",\"z\":0}]}",
+    "id": "canonical-json-07",
+    "kind": "canonical_json",
+    "sha256": "386be46dff602474899de5b41367c8a841cf0dea7ff1f87ef990ef66faa35b00",
+    "value": {
+      "nested": [
+        {
+          "a": "λ",
+          "z": 0
+        }
+      ]
+    }
+  },
+  {
+    "canonical_utf8": "{\"binary\":{\"bits\":\"bff0000000000000\",\"kind\":\"ieee754_binary64\"}}",
+    "id": "canonical-json-08",
+    "kind": "canonical_json",
+    "sha256": "f883b477f06799a33d574f538363cab312fac45096a37c875fa778ebc1fc3d68",
+    "value": {
+      "binary": {
+        "bits": "bff0000000000000",
+        "kind": "ieee754_binary64"
+      }
+    }
+  },
+  {
+    "canonical_utf8": "{\"rational\":{\"denominator\":100,\"numerator\":1}}",
+    "id": "canonical-json-09",
+    "kind": "canonical_json",
+    "sha256": "04eb31a42cff2fc3c4b9f8b16b7354a6123fadd2cd4999c466442ab063ae082f",
+    "value": {
+      "rational": {
+        "denominator": 100,
+        "numerator": 1
+      }
+    }
+  },
+  {
+    "canonical_utf8": "{\"control\":\"line\\nquote\\\"\",\"empty\":{}}",
+    "id": "canonical-json-10",
+    "kind": "canonical_json",
+    "sha256": "d010d3d60439d0b0cc5f14f2593613217c6d80e1b7ec50f829abbfeeb33ac54c",
+    "value": {
+      "control": "line\nquote\"",
+      "empty": {}
+    }
+  },
+  {
+    "field": "sha256",
+    "final": {
+      "sha256": "5041bf1f713df204784353e82f6a4a535931cb64f1f4b4a5aeaffcb720918b22",
+      "x": 1
+    },
+    "id": "self-hash-01",
+    "kind": "self_hash",
+    "sha256": "5041bf1f713df204784353e82f6a4a535931cb64f1f4b4a5aeaffcb720918b22",
+    "unhashed": {
+      "sha256": null,
+      "x": 1
+    }
+  },
+  {
+    "field": "sha256",
+    "final": {
+      "nested": {
+        "a": [
+          1,
+          2
+        ]
+      },
+      "sha256": "b4a3cd0aed8dc08302bf6e24476b7792c4a6801b3021c2619305dbf9165d07f9"
+    },
+    "id": "self-hash-02",
+    "kind": "self_hash",
+    "sha256": "b4a3cd0aed8dc08302bf6e24476b7792c4a6801b3021c2619305dbf9165d07f9",
+    "unhashed": {
+      "nested": {
+        "a": [
+          1,
+          2
+        ]
+      },
+      "sha256": null
+    }
+  },
+  {
+    "field": "sha256",
+    "final": {
+      "kind": "receipt",
+      "sha256": "41bc39e781c0b12ce81c61b15bb3c5ab091e7ef6e570a7f2026e97e02cddf17e",
+      "status": "green"
+    },
+    "id": "self-hash-03",
+    "kind": "self_hash",
+    "sha256": "41bc39e781c0b12ce81c61b15bb3c5ab091e7ef6e570a7f2026e97e02cddf17e",
+    "unhashed": {
+      "kind": "receipt",
+      "sha256": null,
+      "status": "green"
+    }
+  },
+  {
+    "id": "reason-order-01",
+    "input": [
+      {
+        "boundary_index": null,
+        "code": "TRACE_MALFORMED",
+        "evidence": {},
+        "metric": null,
+        "object_name": null,
+        "object_type": null,
+        "role": "comparison"
+      },
+      {
+        "boundary_index": null,
+        "code": "ENGINE_THREADPOOL_ACTIVE",
+        "evidence": {},
+        "metric": null,
+        "object_name": null,
+        "object_type": null,
+        "role": "comparison"
+      }
+    ],
+    "kind": "reason_ordering",
+    "ordered": [
+      {
+        "boundary_index": null,
+        "code": "ENGINE_THREADPOOL_ACTIVE",
+        "evidence": {},
+        "metric": null,
+        "object_name": null,
+        "object_type": null,
+        "role": "comparison"
+      },
+      {
+        "boundary_index": null,
+        "code": "TRACE_MALFORMED",
+        "evidence": {},
+        "metric": null,
+        "object_name": null,
+        "object_type": null,
+        "role": "comparison"
+      }
+    ],
+    "reason_codes": [
+      "ENGINE_THREADPOOL_ACTIVE",
+      "TRACE_MALFORMED"
+    ]
+  },
+  {
+    "id": "reason-order-02",
+    "input": [
+      {
+        "boundary_index": 4,
+        "code": "JOINT_METRIC_TOLERANCE_EXCEEDED",
+        "evidence": {
+          "ratio_milli": 1200
+        },
+        "metric": "angle_rad",
+        "object_name": "elbow",
+        "object_type": "joint",
+        "role": "comparison"
+      },
+      {
+        "boundary_index": null,
+        "code": "BASELINE_NONDETERMINISTIC",
+        "evidence": {},
+        "metric": null,
+        "object_name": null,
+        "object_type": null,
+        "role": "baseline"
+      }
+    ],
+    "kind": "reason_ordering",
+    "ordered": [
+      {
+        "boundary_index": null,
+        "code": "BASELINE_NONDETERMINISTIC",
+        "evidence": {},
+        "metric": null,
+        "object_name": null,
+        "object_type": null,
+        "role": "baseline"
+      },
+      {
+        "boundary_index": 4,
+        "code": "JOINT_METRIC_TOLERANCE_EXCEEDED",
+        "evidence": {
+          "ratio_milli": 1200
+        },
+        "metric": "angle_rad",
+        "object_name": "elbow",
+        "object_type": "joint",
+        "role": "comparison"
+      }
+    ],
+    "reason_codes": [
+      "BASELINE_NONDETERMINISTIC",
+      "JOINT_METRIC_TOLERANCE_EXCEEDED"
+    ]
+  },
+  {
+    "id": "reason-order-03",
+    "input": [
+      {
+        "boundary_index": 2,
+        "code": "CANDIDATE_NONFINITE_STATE",
+        "evidence": {},
+        "metric": null,
+        "object_name": null,
+        "object_type": null,
+        "role": "candidate"
+      },
+      {
+        "boundary_index": 2,
+        "code": "BASELINE_NONFINITE_STATE",
+        "evidence": {},
+        "metric": null,
+        "object_name": null,
+        "object_type": null,
+        "role": "baseline"
+      }
+    ],
+    "kind": "reason_ordering",
+    "ordered": [
+      {
+        "boundary_index": 2,
+        "code": "BASELINE_NONFINITE_STATE",
+        "evidence": {},
+        "metric": null,
+        "object_name": null,
+        "object_type": null,
+        "role": "baseline"
+      },
+      {
+        "boundary_index": 2,
+        "code": "CANDIDATE_NONFINITE_STATE",
+        "evidence": {},
+        "metric": null,
+        "object_name": null,
+        "object_type": null,
+        "role": "candidate"
+      }
+    ],
+    "reason_codes": [
+      "BASELINE_NONFINITE_STATE",
+      "CANDIDATE_NONFINITE_STATE"
+    ]
+  },
+  {
+    "id": "reason-order-04",
+    "input": [
+      {
+        "boundary_index": 3,
+        "code": "TRACE_TIME_RECURRENCE_MISMATCH",
+        "evidence": {
+          "expected_index": 3
+        },
+        "metric": "time",
+        "object_name": null,
+        "object_type": null,
+        "role": "comparison"
+      },
+      {
+        "boundary_index": null,
+        "code": "TRACE_MALFORMED",
+        "evidence": {},
+        "metric": null,
+        "object_name": null,
+        "object_type": null,
+        "role": "comparison"
+      },
+      {
+        "boundary_index": null,
+        "code": "TRACE_CHANNEL_LAYOUT_MISMATCH",
+        "evidence": {},
+        "metric": null,
+        "object_name": "candidate",
+        "object_type": "trace",
+        "role": "comparison"
+      }
+    ],
+    "kind": "reason_ordering",
+    "ordered": [
+      {
+        "boundary_index": 3,
+        "code": "TRACE_TIME_RECURRENCE_MISMATCH",
+        "evidence": {
+          "expected_index": 3
+        },
+        "metric": "time",
+        "object_name": null,
+        "object_type": null,
+        "role": "comparison"
+      },
+      {
+        "boundary_index": null,
+        "code": "TRACE_CHANNEL_LAYOUT_MISMATCH",
+        "evidence": {},
+        "metric": null,
+        "object_name": "candidate",
+        "object_type": "trace",
+        "role": "comparison"
+      },
+      {
+        "boundary_index": null,
+        "code": "TRACE_MALFORMED",
+        "evidence": {},
+        "metric": null,
+        "object_name": null,
+        "object_type": null,
+        "role": "comparison"
+      }
+    ],
+    "reason_codes": [
+      "TRACE_TIME_RECURRENCE_MISMATCH",
+      "TRACE_CHANNEL_LAYOUT_MISMATCH",
+      "TRACE_MALFORMED"
+    ]
+  },
+  {
+    "canonical_utf8": "{\"alignment\":{\"actuator_order\":[\"elbow_motor\"],\"alias_bindings\":[],\"alignment_sha256\":\"2b245d89b7318835c3432b3c99dabebfb7193e15253fd88914d8f1eb5b6165b9\",\"joint_order\":[\"elbow\"]},\"comparison_contract\":{\"actions_semantic_sha256\":\"86edf7d1516b03c6a764410cb393389c23a148aaed1d4ed4cddc4d9448df4cde\",\"aliases_semantic_sha256\":null,\"baseline_model_closure_sha256\":\"05475435a50db538eb7778e8060cd6aa986eb32e92ab6cdfd9c67aca4568ea79\",\"baseline_step_dt\":{\"denominator\":500,\"numerator\":1},\"candidate_model_closure_sha256\":\"ef0791150a9077cd5f7337456d3217b391beff1330e02950b1842719e08ff14d\",\"candidate_step_dt\":{\"denominator\":500,\"numerator\":1},\"control_dt\":{\"denominator\":100,\"numerator\":1},\"initial_state_semantic_sha256\":\"c32ce1ac1c460f7a0b848f470b505e82ccf4b4661e37a2e7ff11e83da63d34b7\",\"monitored_joints\":[{\"angle_rad\":{\"denominator\":1000,\"numerator\":1},\"angular_velocity_rad_s\":{\"denominator\":100,\"numerator\":1},\"canonical_name\":\"elbow\",\"joint_type\":\"hinge\"}],\"repeats\":3,\"schema\":\"metrifid.comparison_contract\",\"schema_version\":1},\"environment\":{\"cpu_identity_sha256\":\"68ab84f7c6d0f5781585eb1b5289499fb29081b918f71ebddb5f72021c9ef9c5\",\"engine_threadpool_state\":\"DISABLED\",\"environment_sha256\":\"c48c736c7a68d0c7ea9fd0fd6db174e0c0dde7963178a6d1914e7f314e6c5b5b\",\"libc\":\"glibc-test\",\"mujoco_native_library_sha256\":\"2178e70efc5cd9c484dd46a4931f092e855365f8cb72f9519a7ef103e6058ae6\",\"mujoco_python_distribution_sha256\":\"ddbfcd0972600ec37c3f38d50200504e65e889c6a2d22a394cc6ea4583638a95\",\"mujoco_version\":\"3.10.0\",\"numpy_version\":\"2.3.0\",\"platform\":\"linux-x86_64\",\"platform_release\":\"test-kernel\",\"python_version\":\"3.13.5\"},\"first_crossing\":null,\"inputs\":{\"actions_raw_sha256\":\"d47b9eb2b8a0b7dc59eaf4b0f9ea411f0739bfe5c03464b74ef35281dff58f3a\",\"actions_semantic_sha256\":\"86edf7d1516b03c6a764410cb393389c23a148aaed1d4ed4cddc4d9448df4cde\",\"aliases_raw_sha256\":null,\"aliases_semantic_sha256\":null,\"baseline_model_closure_sha256\":\"05475435a50db538eb7778e8060cd6aa986eb32e92ab6cdfd9c67aca4568ea79\",\"candidate_model_closure_sha256\":\"ef0791150a9077cd5f7337456d3217b391beff1330e02950b1842719e08ff14d\",\"comparison_contract_sha256\":\"5175c5476ffbd94567e4af35200e3a47b8ac6ac20adf5976f27f3ae78b4a9db2\",\"configuration_raw_sha256\":\"6baf9d607aede3422d0a14d1802907748771c2fba790ed07d9b5bef4813bcf34\",\"initial_state_raw_sha256\":\"19b9ce656eb828ed4d224d536c926b77923d5e90b2fb949757a84ea33d3c0ce9\",\"initial_state_semantic_sha256\":\"c32ce1ac1c460f7a0b848f470b505e82ccf4b4661e37a2e7ff11e83da63d34b7\"},\"limitations\":[\"DECLARED_WORKLOAD_ONLY\",\"MONITORED_JOINT_COORDINATES_ONLY\",\"NO_BODY_CONTACT_SENSOR_REWARD_OR_TASK_CLAIM\",\"NO_GLOBAL_EQUIVALENCE_CLAIM\"],\"metrics\":{},\"model_closures\":{\"baseline\":{\"entrypoint\":\"robot.xml\",\"member_count\":1,\"members\":[{\"path\":\"robot.xml\",\"sha256\":\"c6fc91ad88d89312c63def150aea71dba49bed64bcc738a2195b25d41e85df90\",\"size_bytes\":8}]},\"candidate\":{\"entrypoint\":\"robot.xml\",\"member_count\":1,\"members\":[{\"path\":\"robot.xml\",\"sha256\":\"c79eb9b10459becb7cac70c38f0e3b97f3ceda0de31d9a87b510f1a86d91c0ca\",\"size_bytes\":9}]}},\"monitored_joints\":[{\"angle_rad\":{\"denominator\":1000,\"numerator\":1},\"angular_velocity_rad_s\":{\"denominator\":100,\"numerator\":1},\"canonical_name\":\"elbow\",\"joint_type\":\"hinge\"}],\"numerical_evidence\":{},\"reason_codes\":[],\"reasons\":[],\"receipt_sha256\":\"122c1a1fb4462757e2409021fdbc8772c7bea45743d6941af1fe8461d59f75ac\",\"repeatability\":{},\"schema\":\"metrifid.comparison_receipt\",\"schema_version\":1,\"status\":\"NO_MATERIAL_DIFFERENCE_ON_DECLARED_WORKLOAD\",\"status_rule_schema\":\"metrifid.status_precedence\",\"status_rule_schema_version\":1,\"time\":{\"action_semantics\":\"LEFT_BOUNDARY_ZERO_ORDER_HOLD\",\"baseline_step_dt\":{\"denominator\":500,\"numerator\":1},\"candidate_step_dt\":{\"denominator\":500,\"numerator\":1},\"control_dt\":{\"denominator\":100,\"numerator\":1},\"control_intervals\":2,\"horizon\":{\"denominator\":50,\"numerator\":1},\"interpolation\":\"FORBIDDEN\",\"sample_phase\":\"BOUNDARY_BEFORE_CONTROL\",\"state_samples\":3,\"terminal_sample\":\"INCLUDED\"},\"tolerances\":{\"elbow\":{\"angle_rad\":{\"denominator\":1000,\"numerator\":1},\"angular_velocity_rad_s\":{\"denominator\":100,\"numerator\":1},\"joint_type\":\"hinge\"}},\"tool\":{\"distribution_sha256\":\"7c9bbe5ec9b3fb774e8fa0f54247e93c34ddf8e5d16fe3073420de0ae81a262d\",\"version\":\"0.1.0a3\"}}",
+    "final": {
+      "alignment": {
+        "actuator_order": [
+          "elbow_motor"
+        ],
+        "alias_bindings": [],
+        "alignment_sha256": "2b245d89b7318835c3432b3c99dabebfb7193e15253fd88914d8f1eb5b6165b9",
+        "joint_order": [
+          "elbow"
+        ]
+      },
+      "comparison_contract": {
+        "actions_semantic_sha256": "86edf7d1516b03c6a764410cb393389c23a148aaed1d4ed4cddc4d9448df4cde",
+        "aliases_semantic_sha256": null,
+        "baseline_model_closure_sha256": "05475435a50db538eb7778e8060cd6aa986eb32e92ab6cdfd9c67aca4568ea79",
+        "baseline_step_dt": {
+          "denominator": 500,
+          "numerator": 1
+        },
+        "candidate_model_closure_sha256": "ef0791150a9077cd5f7337456d3217b391beff1330e02950b1842719e08ff14d",
+        "candidate_step_dt": {
+          "denominator": 500,
+          "numerator": 1
+        },
+        "control_dt": {
+          "denominator": 100,
+          "numerator": 1
+        },
+        "initial_state_semantic_sha256": "c32ce1ac1c460f7a0b848f470b505e82ccf4b4661e37a2e7ff11e83da63d34b7",
+        "monitored_joints": [
+          {
+            "angle_rad": {
+              "denominator": 1000,
+              "numerator": 1
+            },
+            "angular_velocity_rad_s": {
+              "denominator": 100,
+              "numerator": 1
+            },
+            "canonical_name": "elbow",
+            "joint_type": "hinge"
+          }
+        ],
+        "repeats": 3,
+        "schema_version": 1,
+        "schema": "metrifid.comparison_contract"
+      },
+      "environment": {
+        "cpu_identity_sha256": "68ab84f7c6d0f5781585eb1b5289499fb29081b918f71ebddb5f72021c9ef9c5",
+        "engine_threadpool_state": "DISABLED",
+        "environment_sha256": "c48c736c7a68d0c7ea9fd0fd6db174e0c0dde7963178a6d1914e7f314e6c5b5b",
+        "libc": "glibc-test",
+        "mujoco_native_library_sha256": "2178e70efc5cd9c484dd46a4931f092e855365f8cb72f9519a7ef103e6058ae6",
+        "mujoco_python_distribution_sha256": "ddbfcd0972600ec37c3f38d50200504e65e889c6a2d22a394cc6ea4583638a95",
+        "mujoco_version": "3.10.0",
+        "numpy_version": "2.3.0",
+        "platform": "linux-x86_64",
+        "platform_release": "test-kernel",
+        "python_version": "3.13.5"
+      },
+      "first_crossing": null,
+      "inputs": {
+        "actions_raw_sha256": "d47b9eb2b8a0b7dc59eaf4b0f9ea411f0739bfe5c03464b74ef35281dff58f3a",
+        "actions_semantic_sha256": "86edf7d1516b03c6a764410cb393389c23a148aaed1d4ed4cddc4d9448df4cde",
+        "aliases_raw_sha256": null,
+        "aliases_semantic_sha256": null,
+        "baseline_model_closure_sha256": "05475435a50db538eb7778e8060cd6aa986eb32e92ab6cdfd9c67aca4568ea79",
+        "candidate_model_closure_sha256": "ef0791150a9077cd5f7337456d3217b391beff1330e02950b1842719e08ff14d",
+        "comparison_contract_sha256": "5175c5476ffbd94567e4af35200e3a47b8ac6ac20adf5976f27f3ae78b4a9db2",
+        "configuration_raw_sha256": "6baf9d607aede3422d0a14d1802907748771c2fba790ed07d9b5bef4813bcf34",
+        "initial_state_raw_sha256": "19b9ce656eb828ed4d224d536c926b77923d5e90b2fb949757a84ea33d3c0ce9",
+        "initial_state_semantic_sha256": "c32ce1ac1c460f7a0b848f470b505e82ccf4b4661e37a2e7ff11e83da63d34b7"
+      },
+      "limitations": [
+        "DECLARED_WORKLOAD_ONLY",
+        "MONITORED_JOINT_COORDINATES_ONLY",
+        "NO_BODY_CONTACT_SENSOR_REWARD_OR_TASK_CLAIM",
+        "NO_GLOBAL_EQUIVALENCE_CLAIM"
+      ],
+      "metrics": {},
+      "model_closures": {
+        "baseline": {
+          "entrypoint": "robot.xml",
+          "member_count": 1,
+          "members": [
+            {
+              "path": "robot.xml",
+              "sha256": "c6fc91ad88d89312c63def150aea71dba49bed64bcc738a2195b25d41e85df90",
+              "size_bytes": 8
+            }
+          ]
+        },
+        "candidate": {
+          "entrypoint": "robot.xml",
+          "member_count": 1,
+          "members": [
+            {
+              "path": "robot.xml",
+              "sha256": "c79eb9b10459becb7cac70c38f0e3b97f3ceda0de31d9a87b510f1a86d91c0ca",
+              "size_bytes": 9
+            }
+          ]
+        }
+      },
+      "monitored_joints": [
+        {
+          "angle_rad": {
+            "denominator": 1000,
+            "numerator": 1
+          },
+          "angular_velocity_rad_s": {
+            "denominator": 100,
+            "numerator": 1
+          },
+          "canonical_name": "elbow",
+          "joint_type": "hinge"
+        }
+      ],
+      "numerical_evidence": {},
+      "reason_codes": [],
+      "reasons": [],
+      "receipt_sha256": "122c1a1fb4462757e2409021fdbc8772c7bea45743d6941af1fe8461d59f75ac",
+      "repeatability": {},
+      "schema_version": 1,
+      "status": "NO_MATERIAL_DIFFERENCE_ON_DECLARED_WORKLOAD",
+      "time": {
+        "action_semantics": "LEFT_BOUNDARY_ZERO_ORDER_HOLD",
+        "baseline_step_dt": {
+          "denominator": 500,
+          "numerator": 1
+        },
+        "candidate_step_dt": {
+          "denominator": 500,
+          "numerator": 1
+        },
+        "control_dt": {
+          "denominator": 100,
+          "numerator": 1
+        },
+        "control_intervals": 2,
+        "horizon": {
+          "denominator": 50,
+          "numerator": 1
+        },
+        "interpolation": "FORBIDDEN",
+        "sample_phase": "BOUNDARY_BEFORE_CONTROL",
+        "state_samples": 3,
+        "terminal_sample": "INCLUDED"
+      },
+      "tolerances": {
+        "elbow": {
+          "angle_rad": {
+            "denominator": 1000,
+            "numerator": 1
+          },
+          "angular_velocity_rad_s": {
+            "denominator": 100,
+            "numerator": 1
+          },
+          "joint_type": "hinge"
+        }
+      },
+      "tool": {
+        "distribution_sha256": "7c9bbe5ec9b3fb774e8fa0f54247e93c34ddf8e5d16fe3073420de0ae81a262d",
+        "version": "0.1.0a3"
+      },
+      "schema": "metrifid.comparison_receipt",
+      "status_rule_schema": "metrifid.status_precedence",
+      "status_rule_schema_version": 1
+    },
+    "id": "receipt-finalization-01",
+    "kind": "receipt_finalization",
+    "receipt_sha256": "122c1a1fb4462757e2409021fdbc8772c7bea45743d6941af1fe8461d59f75ac"
+  },
+  {
+    "canonical_utf8": "{\"alignment\":{\"actuator_order\":[\"elbow_motor\"],\"alias_bindings\":[],\"alignment_sha256\":\"2b245d89b7318835c3432b3c99dabebfb7193e15253fd88914d8f1eb5b6165b9\",\"joint_order\":[\"elbow\"]},\"comparison_contract\":{\"actions_semantic_sha256\":\"86edf7d1516b03c6a764410cb393389c23a148aaed1d4ed4cddc4d9448df4cde\",\"aliases_semantic_sha256\":null,\"baseline_model_closure_sha256\":\"05475435a50db538eb7778e8060cd6aa986eb32e92ab6cdfd9c67aca4568ea79\",\"baseline_step_dt\":{\"denominator\":500,\"numerator\":1},\"candidate_model_closure_sha256\":\"ef0791150a9077cd5f7337456d3217b391beff1330e02950b1842719e08ff14d\",\"candidate_step_dt\":{\"denominator\":500,\"numerator\":1},\"control_dt\":{\"denominator\":100,\"numerator\":1},\"initial_state_semantic_sha256\":\"c32ce1ac1c460f7a0b848f470b505e82ccf4b4661e37a2e7ff11e83da63d34b7\",\"monitored_joints\":[{\"angle_rad\":{\"denominator\":1000,\"numerator\":1},\"angular_velocity_rad_s\":{\"denominator\":100,\"numerator\":1},\"canonical_name\":\"elbow\",\"joint_type\":\"hinge\"}],\"repeats\":3,\"schema\":\"metrifid.comparison_contract\",\"schema_version\":1},\"environment\":{\"cpu_identity_sha256\":\"68ab84f7c6d0f5781585eb1b5289499fb29081b918f71ebddb5f72021c9ef9c5\",\"engine_threadpool_state\":\"ACTIVE\",\"environment_sha256\":\"f92990076170d1f1b21e0f9634abdcb4fba4516f61b84835852266aacaf87c3e\",\"libc\":\"glibc-test\",\"mujoco_native_library_sha256\":\"2178e70efc5cd9c484dd46a4931f092e855365f8cb72f9519a7ef103e6058ae6\",\"mujoco_python_distribution_sha256\":\"ddbfcd0972600ec37c3f38d50200504e65e889c6a2d22a394cc6ea4583638a95\",\"mujoco_version\":\"3.10.0\",\"numpy_version\":\"2.3.0\",\"platform\":\"linux-x86_64\",\"platform_release\":\"test-kernel\",\"python_version\":\"3.13.5\"},\"first_crossing\":null,\"inputs\":{\"actions_raw_sha256\":\"d47b9eb2b8a0b7dc59eaf4b0f9ea411f0739bfe5c03464b74ef35281dff58f3a\",\"actions_semantic_sha256\":\"86edf7d1516b03c6a764410cb393389c23a148aaed1d4ed4cddc4d9448df4cde\",\"aliases_raw_sha256\":null,\"aliases_semantic_sha256\":null,\"baseline_model_closure_sha256\":\"05475435a50db538eb7778e8060cd6aa986eb32e92ab6cdfd9c67aca4568ea79\",\"candidate_model_closure_sha256\":\"ef0791150a9077cd5f7337456d3217b391beff1330e02950b1842719e08ff14d\",\"comparison_contract_sha256\":\"5175c5476ffbd94567e4af35200e3a47b8ac6ac20adf5976f27f3ae78b4a9db2\",\"configuration_raw_sha256\":\"6baf9d607aede3422d0a14d1802907748771c2fba790ed07d9b5bef4813bcf34\",\"initial_state_raw_sha256\":\"19b9ce656eb828ed4d224d536c926b77923d5e90b2fb949757a84ea33d3c0ce9\",\"initial_state_semantic_sha256\":\"c32ce1ac1c460f7a0b848f470b505e82ccf4b4661e37a2e7ff11e83da63d34b7\"},\"limitations\":[\"DECLARED_WORKLOAD_ONLY\",\"MONITORED_JOINT_COORDINATES_ONLY\",\"NO_BODY_CONTACT_SENSOR_REWARD_OR_TASK_CLAIM\",\"NO_GLOBAL_EQUIVALENCE_CLAIM\"],\"metrics\":{},\"model_closures\":{\"baseline\":{\"entrypoint\":\"robot.xml\",\"member_count\":1,\"members\":[{\"path\":\"robot.xml\",\"sha256\":\"c6fc91ad88d89312c63def150aea71dba49bed64bcc738a2195b25d41e85df90\",\"size_bytes\":8}]},\"candidate\":{\"entrypoint\":\"robot.xml\",\"member_count\":1,\"members\":[{\"path\":\"robot.xml\",\"sha256\":\"c79eb9b10459becb7cac70c38f0e3b97f3ceda0de31d9a87b510f1a86d91c0ca\",\"size_bytes\":9}]}},\"monitored_joints\":[{\"angle_rad\":{\"denominator\":1000,\"numerator\":1},\"angular_velocity_rad_s\":{\"denominator\":100,\"numerator\":1},\"canonical_name\":\"elbow\",\"joint_type\":\"hinge\"}],\"numerical_evidence\":{},\"reason_codes\":[\"ENGINE_THREADPOOL_ACTIVE\"],\"reasons\":[{\"boundary_index\":null,\"code\":\"ENGINE_THREADPOOL_ACTIVE\",\"evidence\":{},\"metric\":null,\"object_name\":null,\"object_type\":null,\"role\":\"comparison\"}],\"receipt_sha256\":\"0cbba01da36e0689f593f6fe8abd10d1084336d3a9d99947f1fa8aacd3b37f73\",\"repeatability\":{},\"schema\":\"metrifid.comparison_receipt\",\"schema_version\":1,\"status\":\"COVERAGE_INSUFFICIENT\",\"status_rule_schema\":\"metrifid.status_precedence\",\"status_rule_schema_version\":1,\"time\":{\"action_semantics\":\"LEFT_BOUNDARY_ZERO_ORDER_HOLD\",\"baseline_step_dt\":{\"denominator\":500,\"numerator\":1},\"candidate_step_dt\":{\"denominator\":500,\"numerator\":1},\"control_dt\":{\"denominator\":100,\"numerator\":1},\"control_intervals\":2,\"horizon\":{\"denominator\":50,\"numerator\":1},\"interpolation\":\"FORBIDDEN\",\"sample_phase\":\"BOUNDARY_BEFORE_CONTROL\",\"state_samples\":3,\"terminal_sample\":\"INCLUDED\"},\"tolerances\":{\"elbow\":{\"angle_rad\":{\"denominator\":1000,\"numerator\":1},\"angular_velocity_rad_s\":{\"denominator\":100,\"numerator\":1},\"joint_type\":\"hinge\"}},\"tool\":{\"distribution_sha256\":\"7c9bbe5ec9b3fb774e8fa0f54247e93c34ddf8e5d16fe3073420de0ae81a262d\",\"version\":\"0.1.0a3\"}}",
+    "final": {
+      "alignment": {
+        "actuator_order": [
+          "elbow_motor"
+        ],
+        "alias_bindings": [],
+        "alignment_sha256": "2b245d89b7318835c3432b3c99dabebfb7193e15253fd88914d8f1eb5b6165b9",
+        "joint_order": [
+          "elbow"
+        ]
+      },
+      "comparison_contract": {
+        "actions_semantic_sha256": "86edf7d1516b03c6a764410cb393389c23a148aaed1d4ed4cddc4d9448df4cde",
+        "aliases_semantic_sha256": null,
+        "baseline_model_closure_sha256": "05475435a50db538eb7778e8060cd6aa986eb32e92ab6cdfd9c67aca4568ea79",
+        "baseline_step_dt": {
+          "denominator": 500,
+          "numerator": 1
+        },
+        "candidate_model_closure_sha256": "ef0791150a9077cd5f7337456d3217b391beff1330e02950b1842719e08ff14d",
+        "candidate_step_dt": {
+          "denominator": 500,
+          "numerator": 1
+        },
+        "control_dt": {
+          "denominator": 100,
+          "numerator": 1
+        },
+        "initial_state_semantic_sha256": "c32ce1ac1c460f7a0b848f470b505e82ccf4b4661e37a2e7ff11e83da63d34b7",
+        "monitored_joints": [
+          {
+            "angle_rad": {
+              "denominator": 1000,
+              "numerator": 1
+            },
+            "angular_velocity_rad_s": {
+              "denominator": 100,
+              "numerator": 1
+            },
+            "canonical_name": "elbow",
+            "joint_type": "hinge"
+          }
+        ],
+        "repeats": 3,
+        "schema_version": 1,
+        "schema": "metrifid.comparison_contract"
+      },
+      "environment": {
+        "cpu_identity_sha256": "68ab84f7c6d0f5781585eb1b5289499fb29081b918f71ebddb5f72021c9ef9c5",
+        "engine_threadpool_state": "ACTIVE",
+        "environment_sha256": "f92990076170d1f1b21e0f9634abdcb4fba4516f61b84835852266aacaf87c3e",
+        "libc": "glibc-test",
+        "mujoco_native_library_sha256": "2178e70efc5cd9c484dd46a4931f092e855365f8cb72f9519a7ef103e6058ae6",
+        "mujoco_python_distribution_sha256": "ddbfcd0972600ec37c3f38d50200504e65e889c6a2d22a394cc6ea4583638a95",
+        "mujoco_version": "3.10.0",
+        "numpy_version": "2.3.0",
+        "platform": "linux-x86_64",
+        "platform_release": "test-kernel",
+        "python_version": "3.13.5"
+      },
+      "first_crossing": null,
+      "inputs": {
+        "actions_raw_sha256": "d47b9eb2b8a0b7dc59eaf4b0f9ea411f0739bfe5c03464b74ef35281dff58f3a",
+        "actions_semantic_sha256": "86edf7d1516b03c6a764410cb393389c23a148aaed1d4ed4cddc4d9448df4cde",
+        "aliases_raw_sha256": null,
+        "aliases_semantic_sha256": null,
+        "baseline_model_closure_sha256": "05475435a50db538eb7778e8060cd6aa986eb32e92ab6cdfd9c67aca4568ea79",
+        "candidate_model_closure_sha256": "ef0791150a9077cd5f7337456d3217b391beff1330e02950b1842719e08ff14d",
+        "comparison_contract_sha256": "5175c5476ffbd94567e4af35200e3a47b8ac6ac20adf5976f27f3ae78b4a9db2",
+        "configuration_raw_sha256": "6baf9d607aede3422d0a14d1802907748771c2fba790ed07d9b5bef4813bcf34",
+        "initial_state_raw_sha256": "19b9ce656eb828ed4d224d536c926b77923d5e90b2fb949757a84ea33d3c0ce9",
+        "initial_state_semantic_sha256": "c32ce1ac1c460f7a0b848f470b505e82ccf4b4661e37a2e7ff11e83da63d34b7"
+      },
+      "limitations": [
+        "DECLARED_WORKLOAD_ONLY",
+        "MONITORED_JOINT_COORDINATES_ONLY",
+        "NO_BODY_CONTACT_SENSOR_REWARD_OR_TASK_CLAIM",
+        "NO_GLOBAL_EQUIVALENCE_CLAIM"
+      ],
+      "metrics": {},
+      "model_closures": {
+        "baseline": {
+          "entrypoint": "robot.xml",
+          "member_count": 1,
+          "members": [
+            {
+              "path": "robot.xml",
+              "sha256": "c6fc91ad88d89312c63def150aea71dba49bed64bcc738a2195b25d41e85df90",
+              "size_bytes": 8
+            }
+          ]
+        },
+        "candidate": {
+          "entrypoint": "robot.xml",
+          "member_count": 1,
+          "members": [
+            {
+              "path": "robot.xml",
+              "sha256": "c79eb9b10459becb7cac70c38f0e3b97f3ceda0de31d9a87b510f1a86d91c0ca",
+              "size_bytes": 9
+            }
+          ]
+        }
+      },
+      "monitored_joints": [
+        {
+          "angle_rad": {
+            "denominator": 1000,
+            "numerator": 1
+          },
+          "angular_velocity_rad_s": {
+            "denominator": 100,
+            "numerator": 1
+          },
+          "canonical_name": "elbow",
+          "joint_type": "hinge"
+        }
+      ],
+      "numerical_evidence": {},
+      "reason_codes": [
+        "ENGINE_THREADPOOL_ACTIVE"
+      ],
+      "reasons": [
+        {
+          "boundary_index": null,
+          "code": "ENGINE_THREADPOOL_ACTIVE",
+          "evidence": {},
+          "metric": null,
+          "object_name": null,
+          "object_type": null,
+          "role": "comparison"
+        }
+      ],
+      "receipt_sha256": "0cbba01da36e0689f593f6fe8abd10d1084336d3a9d99947f1fa8aacd3b37f73",
+      "repeatability": {},
+      "schema_version": 1,
+      "status": "COVERAGE_INSUFFICIENT",
+      "time": {
+        "action_semantics": "LEFT_BOUNDARY_ZERO_ORDER_HOLD",
+        "baseline_step_dt": {
+          "denominator": 500,
+          "numerator": 1
+        },
+        "candidate_step_dt": {
+          "denominator": 500,
+          "numerator": 1
+        },
+        "control_dt": {
+          "denominator": 100,
+          "numerator": 1
+        },
+        "control_intervals": 2,
+        "horizon": {
+          "denominator": 50,
+          "numerator": 1
+        },
+        "interpolation": "FORBIDDEN",
+        "sample_phase": "BOUNDARY_BEFORE_CONTROL",
+        "state_samples": 3,
+        "terminal_sample": "INCLUDED"
+      },
+      "tolerances": {
+        "elbow": {
+          "angle_rad": {
+            "denominator": 1000,
+            "numerator": 1
+          },
+          "angular_velocity_rad_s": {
+            "denominator": 100,
+            "numerator": 1
+          },
+          "joint_type": "hinge"
+        }
+      },
+      "tool": {
+        "distribution_sha256": "7c9bbe5ec9b3fb774e8fa0f54247e93c34ddf8e5d16fe3073420de0ae81a262d",
+        "version": "0.1.0a3"
+      },
+      "schema": "metrifid.comparison_receipt",
+      "status_rule_schema": "metrifid.status_precedence",
+      "status_rule_schema_version": 1
+    },
+    "id": "receipt-finalization-02",
+    "kind": "receipt_finalization",
+    "receipt_sha256": "0cbba01da36e0689f593f6fe8abd10d1084336d3a9d99947f1fa8aacd3b37f73"
+  },
+  {
+    "canonical_utf8": "{\"alignment\":{\"actuator_order\":[\"elbow_motor\"],\"alias_bindings\":[],\"alignment_sha256\":\"2b245d89b7318835c3432b3c99dabebfb7193e15253fd88914d8f1eb5b6165b9\",\"joint_order\":[\"elbow\"]},\"comparison_contract\":{\"actions_semantic_sha256\":\"86edf7d1516b03c6a764410cb393389c23a148aaed1d4ed4cddc4d9448df4cde\",\"aliases_semantic_sha256\":null,\"baseline_model_closure_sha256\":\"05475435a50db538eb7778e8060cd6aa986eb32e92ab6cdfd9c67aca4568ea79\",\"baseline_step_dt\":{\"denominator\":500,\"numerator\":1},\"candidate_model_closure_sha256\":\"ef0791150a9077cd5f7337456d3217b391beff1330e02950b1842719e08ff14d\",\"candidate_step_dt\":{\"denominator\":500,\"numerator\":1},\"control_dt\":{\"denominator\":100,\"numerator\":1},\"initial_state_semantic_sha256\":\"c32ce1ac1c460f7a0b848f470b505e82ccf4b4661e37a2e7ff11e83da63d34b7\",\"monitored_joints\":[{\"angle_rad\":{\"denominator\":1000,\"numerator\":1},\"angular_velocity_rad_s\":{\"denominator\":100,\"numerator\":1},\"canonical_name\":\"elbow\",\"joint_type\":\"hinge\"}],\"repeats\":3,\"schema\":\"metrifid.comparison_contract\",\"schema_version\":1},\"environment\":{\"cpu_identity_sha256\":\"68ab84f7c6d0f5781585eb1b5289499fb29081b918f71ebddb5f72021c9ef9c5\",\"engine_threadpool_state\":\"DISABLED\",\"environment_sha256\":\"c48c736c7a68d0c7ea9fd0fd6db174e0c0dde7963178a6d1914e7f314e6c5b5b\",\"libc\":\"glibc-test\",\"mujoco_native_library_sha256\":\"2178e70efc5cd9c484dd46a4931f092e855365f8cb72f9519a7ef103e6058ae6\",\"mujoco_python_distribution_sha256\":\"ddbfcd0972600ec37c3f38d50200504e65e889c6a2d22a394cc6ea4583638a95\",\"mujoco_version\":\"3.10.0\",\"numpy_version\":\"2.3.0\",\"platform\":\"linux-x86_64\",\"platform_release\":\"test-kernel\",\"python_version\":\"3.13.5\"},\"first_crossing\":null,\"inputs\":{\"actions_raw_sha256\":\"d47b9eb2b8a0b7dc59eaf4b0f9ea411f0739bfe5c03464b74ef35281dff58f3a\",\"actions_semantic_sha256\":\"86edf7d1516b03c6a764410cb393389c23a148aaed1d4ed4cddc4d9448df4cde\",\"aliases_raw_sha256\":null,\"aliases_semantic_sha256\":null,\"baseline_model_closure_sha256\":\"05475435a50db538eb7778e8060cd6aa986eb32e92ab6cdfd9c67aca4568ea79\",\"candidate_model_closure_sha256\":\"ef0791150a9077cd5f7337456d3217b391beff1330e02950b1842719e08ff14d\",\"comparison_contract_sha256\":\"5175c5476ffbd94567e4af35200e3a47b8ac6ac20adf5976f27f3ae78b4a9db2\",\"configuration_raw_sha256\":\"6baf9d607aede3422d0a14d1802907748771c2fba790ed07d9b5bef4813bcf34\",\"initial_state_raw_sha256\":\"19b9ce656eb828ed4d224d536c926b77923d5e90b2fb949757a84ea33d3c0ce9\",\"initial_state_semantic_sha256\":\"c32ce1ac1c460f7a0b848f470b505e82ccf4b4661e37a2e7ff11e83da63d34b7\"},\"limitations\":[\"DECLARED_WORKLOAD_ONLY\",\"MONITORED_JOINT_COORDINATES_ONLY\",\"NO_BODY_CONTACT_SENSOR_REWARD_OR_TASK_CLAIM\",\"NO_GLOBAL_EQUIVALENCE_CLAIM\"],\"metrics\":{},\"model_closures\":{\"baseline\":{\"entrypoint\":\"robot.xml\",\"member_count\":1,\"members\":[{\"path\":\"robot.xml\",\"sha256\":\"c6fc91ad88d89312c63def150aea71dba49bed64bcc738a2195b25d41e85df90\",\"size_bytes\":8}]},\"candidate\":{\"entrypoint\":\"robot.xml\",\"member_count\":1,\"members\":[{\"path\":\"robot.xml\",\"sha256\":\"c79eb9b10459becb7cac70c38f0e3b97f3ceda0de31d9a87b510f1a86d91c0ca\",\"size_bytes\":9}]}},\"monitored_joints\":[{\"angle_rad\":{\"denominator\":1000,\"numerator\":1},\"angular_velocity_rad_s\":{\"denominator\":100,\"numerator\":1},\"canonical_name\":\"elbow\",\"joint_type\":\"hinge\"}],\"numerical_evidence\":{},\"reason_codes\":[\"CANDIDATE_NONFINITE_STATE\"],\"reasons\":[{\"boundary_index\":null,\"code\":\"CANDIDATE_NONFINITE_STATE\",\"evidence\":{},\"metric\":null,\"object_name\":null,\"object_type\":null,\"role\":\"candidate\"}],\"receipt_sha256\":\"cf63ff5dcdbe150421f206cfa3caee00bdf4b36fb4f184c053e8e00ff43d334e\",\"repeatability\":{},\"schema\":\"metrifid.comparison_receipt\",\"schema_version\":1,\"status\":\"MATERIAL_BEHAVIOR_CHANGE\",\"status_rule_schema\":\"metrifid.status_precedence\",\"status_rule_schema_version\":1,\"time\":{\"action_semantics\":\"LEFT_BOUNDARY_ZERO_ORDER_HOLD\",\"baseline_step_dt\":{\"denominator\":500,\"numerator\":1},\"candidate_step_dt\":{\"denominator\":500,\"numerator\":1},\"control_dt\":{\"denominator\":100,\"numerator\":1},\"control_intervals\":2,\"horizon\":{\"denominator\":50,\"numerator\":1},\"interpolation\":\"FORBIDDEN\",\"sample_phase\":\"BOUNDARY_BEFORE_CONTROL\",\"state_samples\":3,\"terminal_sample\":\"INCLUDED\"},\"tolerances\":{\"elbow\":{\"angle_rad\":{\"denominator\":1000,\"numerator\":1},\"angular_velocity_rad_s\":{\"denominator\":100,\"numerator\":1},\"joint_type\":\"hinge\"}},\"tool\":{\"distribution_sha256\":\"7c9bbe5ec9b3fb774e8fa0f54247e93c34ddf8e5d16fe3073420de0ae81a262d\",\"version\":\"0.1.0a3\"}}",
+    "final": {
+      "alignment": {
+        "actuator_order": [
+          "elbow_motor"
+        ],
+        "alias_bindings": [],
+        "alignment_sha256": "2b245d89b7318835c3432b3c99dabebfb7193e15253fd88914d8f1eb5b6165b9",
+        "joint_order": [
+          "elbow"
+        ]
+      },
+      "comparison_contract": {
+        "actions_semantic_sha256": "86edf7d1516b03c6a764410cb393389c23a148aaed1d4ed4cddc4d9448df4cde",
+        "aliases_semantic_sha256": null,
+        "baseline_model_closure_sha256": "05475435a50db538eb7778e8060cd6aa986eb32e92ab6cdfd9c67aca4568ea79",
+        "baseline_step_dt": {
+          "denominator": 500,
+          "numerator": 1
+        },
+        "candidate_model_closure_sha256": "ef0791150a9077cd5f7337456d3217b391beff1330e02950b1842719e08ff14d",
+        "candidate_step_dt": {
+          "denominator": 500,
+          "numerator": 1
+        },
+        "control_dt": {
+          "denominator": 100,
+          "numerator": 1
+        },
+        "initial_state_semantic_sha256": "c32ce1ac1c460f7a0b848f470b505e82ccf4b4661e37a2e7ff11e83da63d34b7",
+        "monitored_joints": [
+          {
+            "angle_rad": {
+              "denominator": 1000,
+              "numerator": 1
+            },
+            "angular_velocity_rad_s": {
+              "denominator": 100,
+              "numerator": 1
+            },
+            "canonical_name": "elbow",
+            "joint_type": "hinge"
+          }
+        ],
+        "repeats": 3,
+        "schema_version": 1,
+        "schema": "metrifid.comparison_contract"
+      },
+      "environment": {
+        "cpu_identity_sha256": "68ab84f7c6d0f5781585eb1b5289499fb29081b918f71ebddb5f72021c9ef9c5",
+        "engine_threadpool_state": "DISABLED",
+        "environment_sha256": "c48c736c7a68d0c7ea9fd0fd6db174e0c0dde7963178a6d1914e7f314e6c5b5b",
+        "libc": "glibc-test",
+        "mujoco_native_library_sha256": "2178e70efc5cd9c484dd46a4931f092e855365f8cb72f9519a7ef103e6058ae6",
+        "mujoco_python_distribution_sha256": "ddbfcd0972600ec37c3f38d50200504e65e889c6a2d22a394cc6ea4583638a95",
+        "mujoco_version": "3.10.0",
+        "numpy_version": "2.3.0",
+        "platform": "linux-x86_64",
+        "platform_release": "test-kernel",
+        "python_version": "3.13.5"
+      },
+      "first_crossing": null,
+      "inputs": {
+        "actions_raw_sha256": "d47b9eb2b8a0b7dc59eaf4b0f9ea411f0739bfe5c03464b74ef35281dff58f3a",
+        "actions_semantic_sha256": "86edf7d1516b03c6a764410cb393389c23a148aaed1d4ed4cddc4d9448df4cde",
+        "aliases_raw_sha256": null,
+        "aliases_semantic_sha256": null,
+        "baseline_model_closure_sha256": "05475435a50db538eb7778e8060cd6aa986eb32e92ab6cdfd9c67aca4568ea79",
+        "candidate_model_closure_sha256": "ef0791150a9077cd5f7337456d3217b391beff1330e02950b1842719e08ff14d",
+        "comparison_contract_sha256": "5175c5476ffbd94567e4af35200e3a47b8ac6ac20adf5976f27f3ae78b4a9db2",
+        "configuration_raw_sha256": "6baf9d607aede3422d0a14d1802907748771c2fba790ed07d9b5bef4813bcf34",
+        "initial_state_raw_sha256": "19b9ce656eb828ed4d224d536c926b77923d5e90b2fb949757a84ea33d3c0ce9",
+        "initial_state_semantic_sha256": "c32ce1ac1c460f7a0b848f470b505e82ccf4b4661e37a2e7ff11e83da63d34b7"
+      },
+      "limitations": [
+        "DECLARED_WORKLOAD_ONLY",
+        "MONITORED_JOINT_COORDINATES_ONLY",
+        "NO_BODY_CONTACT_SENSOR_REWARD_OR_TASK_CLAIM",
+        "NO_GLOBAL_EQUIVALENCE_CLAIM"
+      ],
+      "metrics": {},
+      "model_closures": {
+        "baseline": {
+          "entrypoint": "robot.xml",
+          "member_count": 1,
+          "members": [
+            {
+              "path": "robot.xml",
+              "sha256": "c6fc91ad88d89312c63def150aea71dba49bed64bcc738a2195b25d41e85df90",
+              "size_bytes": 8
+            }
+          ]
+        },
+        "candidate": {
+          "entrypoint": "robot.xml",
+          "member_count": 1,
+          "members": [
+            {
+              "path": "robot.xml",
+              "sha256": "c79eb9b10459becb7cac70c38f0e3b97f3ceda0de31d9a87b510f1a86d91c0ca",
+              "size_bytes": 9
+            }
+          ]
+        }
+      },
+      "monitored_joints": [
+        {
+          "angle_rad": {
+            "denominator": 1000,
+            "numerator": 1
+          },
+          "angular_velocity_rad_s": {
+            "denominator": 100,
+            "numerator": 1
+          },
+          "canonical_name": "elbow",
+          "joint_type": "hinge"
+        }
+      ],
+      "numerical_evidence": {},
+      "reason_codes": [
+        "CANDIDATE_NONFINITE_STATE"
+      ],
+      "reasons": [
+        {
+          "boundary_index": null,
+          "code": "CANDIDATE_NONFINITE_STATE",
+          "evidence": {},
+          "metric": null,
+          "object_name": null,
+          "object_type": null,
+          "role": "candidate"
+        }
+      ],
+      "receipt_sha256": "cf63ff5dcdbe150421f206cfa3caee00bdf4b36fb4f184c053e8e00ff43d334e",
+      "repeatability": {},
+      "schema_version": 1,
+      "status": "MATERIAL_BEHAVIOR_CHANGE",
+      "time": {
+        "action_semantics": "LEFT_BOUNDARY_ZERO_ORDER_HOLD",
+        "baseline_step_dt": {
+          "denominator": 500,
+          "numerator": 1
+        },
+        "candidate_step_dt": {
+          "denominator": 500,
+          "numerator": 1
+        },
+        "control_dt": {
+          "denominator": 100,
+          "numerator": 1
+        },
+        "control_intervals": 2,
+        "horizon": {
+          "denominator": 50,
+          "numerator": 1
+        },
+        "interpolation": "FORBIDDEN",
+        "sample_phase": "BOUNDARY_BEFORE_CONTROL",
+        "state_samples": 3,
+        "terminal_sample": "INCLUDED"
+      },
+      "tolerances": {
+        "elbow": {
+          "angle_rad": {
+            "denominator": 1000,
+            "numerator": 1
+          },
+          "angular_velocity_rad_s": {
+            "denominator": 100,
+            "numerator": 1
+          },
+          "joint_type": "hinge"
+        }
+      },
+      "tool": {
+        "distribution_sha256": "7c9bbe5ec9b3fb774e8fa0f54247e93c34ddf8e5d16fe3073420de0ae81a262d",
+        "version": "0.1.0a3"
+      },
+      "schema": "metrifid.comparison_receipt",
+      "status_rule_schema": "metrifid.status_precedence",
+      "status_rule_schema_version": 1
+    },
+    "id": "receipt-finalization-03",
+    "kind": "receipt_finalization",
+    "receipt_sha256": "cf63ff5dcdbe150421f206cfa3caee00bdf4b36fb4f184c053e8e00ff43d334e"
+  }
+]
