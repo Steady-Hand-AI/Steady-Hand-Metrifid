@@ -5,6 +5,10 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 5
+    # MuJoCo is an execution-profile requirement. Upgrade it only through
+    # a dedicated compatibility and compiled-identity validation campaign.
+    ignore:
+      - dependency-name: mujoco
 
   - package-ecosystem: github-actions
     directory: /

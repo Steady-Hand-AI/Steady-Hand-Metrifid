@@ -4,6 +4,7 @@ on:
   push:
     tags:
       - "0.2.1"
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -40,12 +41,11 @@ jobs:
           python -m pip install -c .github/quality-constraints.txt \
             build editables hatchling hypothesis mypy numpy pytest pytest-randomly ruff twine \
             "mujoco==3.10.0.*"
-          python -m pip install --no-build-isolation --no-deps --editable .
 
       - name: Quality gates
         run: |
-          python -m ruff check .
-          python -m ruff format --check .
+          python -m ruff check --no-cache .
+          python -m ruff format --check --no-cache .
           python -m mypy --strict src/metrifid
 
       - name: Build direct distributions
@@ -58,19 +58,64 @@ jobs:
 
       - name: Test noneditable wheel
         run: |
-          python -m venv .release-wheel-venv
-          .release-wheel-venv/bin/python -m pip install dist/metrifid-0.2.1-py3-none-any.whl
-          .release-wheel-venv/bin/python -m pip install -c .github/quality-constraints.txt \
-            editables hatchling hypothesis mypy pytest pytest-randomly
-          .release-wheel-venv/bin/python -m pip check
-          .release-wheel-venv/bin/python -m pytest -q --junitxml=release-junit.xml tests
-          .release-wheel-venv/bin/python tools/mjb_characterization.py | tee mjb-characterization.log
+          RELEASE_VENV="$RUNNER_TEMP/metrifid-release-wheel-venv"
+          TEST_CWD="$RUNNER_TEMP/metrifid-release-tests"
+          rm -rf "$RELEASE_VENV" "$TEST_CWD"
+          python -m venv "$RELEASE_VENV"
+          mkdir -p "$TEST_CWD"
+          "$RELEASE_VENV/bin/python" -m pip install "$GITHUB_WORKSPACE/dist/metrifid-0.2.1-py3-none-any.whl"
+          "$RELEASE_VENV/bin/python" -m pip install -c "$GITHUB_WORKSPACE/.github/quality-constraints.txt" \
+            build editables hatchling hypothesis mypy pytest pytest-randomly
+          "$RELEASE_VENV/bin/python" -m pip check
+          cd "$TEST_CWD"
+          PATH="$RELEASE_VENV/bin:$PATH" PYTHONPATH= \
+            "$RELEASE_VENV/bin/python" -m pytest -q \
+              --junitxml="$GITHUB_WORKSPACE/release-junit.xml" \
+              "$GITHUB_WORKSPACE/tests"
+          PATH="$RELEASE_VENV/bin:$PATH" PYTHONPATH= \
+            "$RELEASE_VENV/bin/python" "$GITHUB_WORKSPACE/tools/mjb_characterization.py" \
+              | tee "$GITHUB_WORKSPACE/mjb-characterization.log"
+          rm -rf "$RUNNER_TEMP/metrifid-demo"
           mkdir -p "$RUNNER_TEMP/metrifid-demo"
           cd "$RUNNER_TEMP/metrifid-demo"
-          "$GITHUB_WORKSPACE/.release-wheel-venv/bin/python" -m metrifid.demo | tee "$GITHUB_WORKSPACE/demo.log"
+          PATH="$RELEASE_VENV/bin:$PATH" PYTHONPATH= \
+            "$RELEASE_VENV/bin/python" -m metrifid.demo \
+              | tee "$GITHUB_WORKSPACE/demo.log"
+
+      - name: Verify the complete release test contract
+        run: |
+          python - <<'PY'
+          import xml.etree.ElementTree as ET
+
+          root = ET.parse("release-junit.xml").getroot()
+          cases = list(root.iter("testcase"))
+          skipped = [case for case in cases if case.find("skipped") is not None]
+          failed = [case for case in cases if case.find("failure") is not None]
+          errored = [case for case in cases if case.find("error") is not None]
+          assert len(cases) == 1372, len(cases)
+          assert len(skipped) == 10, len(skipped)
+          assert not failed, [case.attrib for case in failed]
+          assert not errored, [case.attrib for case in errored]
+
+          required_distribution_tests = {
+              "test_sdist_contains_every_documented_repository_path",
+              "test_direct_wheel_package_bytes_match_the_candidate_source",
+              "test_direct_and_rebuilt_wheels_carry_identical_package_members",
+              "test_direct_and_rebuilt_wheels_share_one_console_entry_point",
+              "test_direct_and_rebuilt_wheels_declare_semantically_equal_metadata",
+              "test_direct_and_rebuilt_wheels_carry_identical_license_and_typing_markers",
+              "test_distribution_metadata_identifies_license_and_owner",
+              "test_both_artifacts_report_the_numeric_release_version",
+          }
+          for required_name in sorted(required_distribution_tests):
+              matches = [case for case in cases if case.attrib.get("name") == required_name]
+              assert len(matches) == 1, (required_name, [case.attrib for case in matches])
+              assert matches[0].find("skipped") is None, required_name
+          PY
 
       - name: Rebuild wheel from source distribution
         run: |
+          rm -rf sdist-extract sdist-wheel
           mkdir -p sdist-extract sdist-wheel
           tar -xzf dist/metrifid-0.2.1.tar.gz -C sdist-extract
           python -m build --wheel --outdir sdist-wheel sdist-extract/metrifid-0.2.1
@@ -82,8 +127,13 @@ jobs:
           python - <<'PY'
           import hashlib, json, pathlib, xml.etree.ElementTree as ET
           root = ET.parse('release-junit.xml').getroot()
-          suites = [root] if root.tag == 'testsuite' else list(root.findall('.//testsuite'))
-          totals = {name: sum(int(suite.attrib.get(name, '0')) for suite in suites) for name in ('tests', 'failures', 'errors', 'skipped')}
+          cases = list(root.iter('testcase'))
+          totals = {
+              'tests': len(cases),
+              'failures': sum(case.find('failure') is not None for case in cases),
+              'errors': sum(case.find('error') is not None for case in cases),
+              'skipped': sum(case.find('skipped') is not None for case in cases),
+          }
           evidence = {
               'schema_version': 1,
               'project': 'metrifid',
@@ -102,8 +152,12 @@ jobs:
                   'size': path.stat().st_size,
                   'sha256': hashlib.sha256(path.read_bytes()).hexdigest(),
               })
-          assert evidence['tests']['tests'] > 0
-          assert evidence['tests']['failures'] == 0 and evidence['tests']['errors'] == 0
+          assert evidence['tests'] == {
+              'tests': 1372,
+              'failures': 0,
+              'errors': 0,
+              'skipped': 10,
+          }, evidence['tests']
           assert evidence['mjb_characterization_passed'] and evidence['demo_passed']
           pathlib.Path('release-evidence.json').write_text(json.dumps(evidence, indent=2, sort_keys=True) + '\n', encoding='utf-8')
           PY
@@ -122,9 +176,51 @@ jobs:
             demo.log
           if-no-files-found: error
 
-  publish-testpypi:
-    name: publish exact artifacts to TestPyPI
+  check_testpypi_state:
+    name: check TestPyPI version state
     needs: build-and-validate
+    runs-on: ubuntu-24.04
+    outputs:
+      upload: ${{ steps.index_state.outputs.upload }}
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: ${{ env.RELEASE_ARTIFACT }}
+          path: release-artifacts
+      - name: Compare TestPyPI state with the exact release artifacts
+        id: index_state
+        env:
+          INDEX_JSON_URL: https://test.pypi.org/pypi/metrifid/0.2.1/json
+        run: |
+          python - <<'PY'
+          import hashlib, json, os, pathlib, urllib.error, urllib.request
+
+          expected = {
+              path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+              for path in pathlib.Path('release-artifacts/dist').iterdir()
+              if path.is_file()
+          }
+          assert set(expected) == {'metrifid-0.2.1-py3-none-any.whl', 'metrifid-0.2.1.tar.gz'}, expected
+          try:
+              with urllib.request.urlopen(os.environ['INDEX_JSON_URL'], timeout=30) as response:
+                  value = json.load(response)
+          except urllib.error.HTTPError as exc:
+              if exc.code != 404:
+                  raise
+              upload = True
+          else:
+              observed = {row['filename']: row['digests']['sha256'] for row in value['urls']}
+              if observed != expected:
+                  raise SystemExit(f'TestPyPI already contains mismatched or incomplete files: {observed!r}')
+              upload = False
+          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as output:
+              output.write(f"upload={'true' if upload else 'false'}\n")
+          PY
+
+  publish_testpypi:
+    name: publish exact artifacts to TestPyPI
+    needs: check_testpypi_state
+    if: needs.check_testpypi_state.outputs.upload == 'true'
     runs-on: ubuntu-24.04
     environment:
       name: testpypi
@@ -142,9 +238,10 @@ jobs:
           packages-dir: release-artifacts/dist/
           repository-url: https://test.pypi.org/legacy/
 
-  verify-testpypi:
+  verify_testpypi:
     name: verify TestPyPI publication
-    needs: publish-testpypi
+    needs: [check_testpypi_state, publish_testpypi]
+    if: ${{ always() && needs.check_testpypi_state.result == 'success' && (needs.publish_testpypi.result == 'success' || needs.publish_testpypi.result == 'skipped') }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
@@ -158,36 +255,190 @@ jobs:
         run: |
           python - <<'PY'
           import hashlib, json, pathlib, time, urllib.request
-          expected = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in pathlib.Path('release-artifacts/dist').iterdir()}
+
+          expected_paths = {
+              path.name: path
+              for path in pathlib.Path('release-artifacts/dist').iterdir()
+              if path.is_file()
+          }
+          expected = {name: hashlib.sha256(path.read_bytes()).hexdigest() for name, path in expected_paths.items()}
           url = 'https://test.pypi.org/pypi/metrifid/0.2.1/json'
-          for _ in range(30):
+          for _ in range(90):
               try:
-                  data = json.load(urllib.request.urlopen(url, timeout=20))
-                  observed = {row['filename']: row['digests']['sha256'] for row in data['urls']}
+                  with urllib.request.urlopen(url, timeout=20) as response:
+                      data = json.load(response)
+                  rows = {row['filename']: row for row in data['urls']}
+                  observed = {name: row['digests']['sha256'] for name, row in rows.items()}
                   if observed == expected:
                       break
               except Exception:
                   pass
               time.sleep(10)
           else:
-              raise SystemExit('TestPyPI artifacts or hashes did not match')
+              raise SystemExit('TestPyPI artifacts or hashes did not match within 15 minutes')
+          download = pathlib.Path('testpypi-download')
+          download.mkdir()
+          for name, row in rows.items():
+              target = download / name
+              with urllib.request.urlopen(row['url'], timeout=60) as response:
+                  target.write_bytes(response.read())
+              if hashlib.sha256(target.read_bytes()).hexdigest() != expected[name]:
+                  raise SystemExit(f'TestPyPI downloaded bytes differ for {name}')
           PY
-          mkdir testpypi-download
-          python -m pip download --no-deps --only-binary=:all: --index-url https://test.pypi.org/simple/ --dest testpypi-download metrifid==0.2.1
-          cmp testpypi-download/metrifid-0.2.1-py3-none-any.whl release-artifacts/dist/metrifid-0.2.1-py3-none-any.whl
-          python -m venv testpypi-venv
-          testpypi-venv/bin/python -m pip install testpypi-download/metrifid-0.2.1-py3-none-any.whl
-          testpypi-venv/bin/metrifid --help
-          testpypi-venv/bin/metrifid certify --help
-          testpypi-venv/bin/metrifid compare --help
-          testpypi-venv/bin/metrifid audit-timestep --help
-          testpypi-venv/bin/python -c 'import metrifid; assert metrifid.__version__ == "0.2.1"'
-          mkdir testpypi-demo && cd testpypi-demo
-          ../testpypi-venv/bin/python -m metrifid.demo
+          TESTPYPI_VENV="$RUNNER_TEMP/metrifid-testpypi-venv"
+          rm -rf "$TESTPYPI_VENV"
+          python -m venv "$TESTPYPI_VENV"
+          "$TESTPYPI_VENV/bin/python" -m pip install testpypi-download/metrifid-0.2.1-py3-none-any.whl
+          "$TESTPYPI_VENV/bin/python" -m pip check
+          "$TESTPYPI_VENV/bin/metrifid" --help
+          "$TESTPYPI_VENV/bin/metrifid" certify --help
+          "$TESTPYPI_VENV/bin/metrifid" compare --help
+          "$TESTPYPI_VENV/bin/metrifid" audit-timestep --help
+          "$TESTPYPI_VENV/bin/python" - <<'PY'
+          import metrifid
+          from metrifid.certify import certify_models, load_and_validate_certification_receipt
+          from metrifid.compare import compare_configuration_file
+          from metrifid.timestep_audit import audit_configuration_file
+          assert metrifid.__version__ == '0.2.1'
+          assert callable(certify_models)
+          assert callable(load_and_validate_certification_receipt)
+          assert callable(compare_configuration_file)
+          assert callable(audit_configuration_file)
+          PY
+          rm -rf "$RUNNER_TEMP/metrifid-testpypi-demo"
+          mkdir -p "$RUNNER_TEMP/metrifid-testpypi-demo"
+          cd "$RUNNER_TEMP/metrifid-testpypi-demo"
+          "$TESTPYPI_VENV/bin/python" -m metrifid.demo
 
-  publish-pypi:
+  prepare_github_release:
+    name: prepare GitHub draft release
+    needs: verify_testpypi
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.12"
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: ${{ env.RELEASE_ARTIFACT }}
+          path: release-artifacts
+      - name: Create or verify the draft GitHub release
+        run: |
+          set -euo pipefail
+          RELEASE_JSON="$RUNNER_TEMP/metrifid-release-before-pypi.json"
+          RELEASE_ERROR="$RUNNER_TEMP/metrifid-release-before-pypi.err"
+          if gh release view "$RELEASE_VERSION" \
+            --repo "$GH_REPO" \
+            --json tagName,isDraft,isPrerelease,name,body > "$RELEASE_JSON" 2> "$RELEASE_ERROR"; then
+            echo "GitHub release already exists; identity and assets will be verified"
+          else
+            if ! grep -Eqi "release not found|HTTP 404|not found" "$RELEASE_ERROR"; then
+              cat "$RELEASE_ERROR" >&2
+              exit 1
+            fi
+            gh release create "$RELEASE_VERSION" \
+              release-artifacts/dist/metrifid-0.2.1-py3-none-any.whl \
+              release-artifacts/dist/metrifid-0.2.1.tar.gz \
+              release-artifacts/SHA256SUMS.txt \
+              release-artifacts/release-evidence.json \
+              --repo "$GH_REPO" \
+              --draft \
+              --verify-tag \
+              --title "Metrifid 0.2.1" \
+              --notes-file release-artifacts/RELEASE_NOTES.md
+            gh release view "$RELEASE_VERSION" \
+              --repo "$GH_REPO" \
+              --json tagName,isDraft,isPrerelease,name,body > "$RELEASE_JSON"
+          fi
+          RELEASE_JSON="$RELEASE_JSON" python - <<'PY'
+          import json, os, pathlib
+
+          release = json.loads(pathlib.Path(os.environ['RELEASE_JSON']).read_text(encoding='utf-8'))
+          notes = pathlib.Path('release-artifacts/RELEASE_NOTES.md').read_text(encoding='utf-8')
+          assert release['tagName'] == '0.2.1', release
+          assert release['name'] == 'Metrifid 0.2.1', release
+          assert release['body'].strip() == notes.strip(), release
+          assert release['isPrerelease'] is False, release
+          assert isinstance(release['isDraft'], bool), release
+          PY
+          rm -rf "$RUNNER_TEMP/metrifid-draft-release-assets"
+          mkdir -p "$RUNNER_TEMP/metrifid-draft-release-assets"
+          gh release download "$RELEASE_VERSION" \
+            --repo "$GH_REPO" \
+            --dir "$RUNNER_TEMP/metrifid-draft-release-assets"
+          RELEASE_ASSETS="$RUNNER_TEMP/metrifid-draft-release-assets" python - <<'PY'
+          import hashlib, os, pathlib
+
+          expected_names = {
+              'metrifid-0.2.1-py3-none-any.whl',
+              'metrifid-0.2.1.tar.gz',
+              'SHA256SUMS.txt',
+              'release-evidence.json',
+          }
+          expected = {}
+          for path in pathlib.Path('release-artifacts').rglob('*'):
+              if path.is_file() and path.name in expected_names:
+                  expected[path.name] = hashlib.sha256(path.read_bytes()).hexdigest()
+          observed_dir = pathlib.Path(os.environ['RELEASE_ASSETS'])
+          observed = {
+              path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+              for path in observed_dir.iterdir()
+              if path.is_file()
+          }
+          assert set(expected) == expected_names, expected
+          assert observed == expected, (observed, expected)
+          PY
+
+  check_pypi_state:
+    name: check PyPI version state
+    needs: prepare_github_release
+    runs-on: ubuntu-24.04
+    outputs:
+      upload: ${{ steps.index_state.outputs.upload }}
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: ${{ env.RELEASE_ARTIFACT }}
+          path: release-artifacts
+      - name: Compare PyPI state with the exact release artifacts
+        id: index_state
+        env:
+          INDEX_JSON_URL: https://pypi.org/pypi/metrifid/0.2.1/json
+        run: |
+          python - <<'PY'
+          import hashlib, json, os, pathlib, urllib.error, urllib.request
+
+          expected = {
+              path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+              for path in pathlib.Path('release-artifacts/dist').iterdir()
+              if path.is_file()
+          }
+          assert set(expected) == {'metrifid-0.2.1-py3-none-any.whl', 'metrifid-0.2.1.tar.gz'}, expected
+          try:
+              with urllib.request.urlopen(os.environ['INDEX_JSON_URL'], timeout=30) as response:
+                  value = json.load(response)
+          except urllib.error.HTTPError as exc:
+              if exc.code != 404:
+                  raise
+              upload = True
+          else:
+              observed = {row['filename']: row['digests']['sha256'] for row in value['urls']}
+              if observed != expected:
+                  raise SystemExit(f'PyPI already contains mismatched or incomplete files: {observed!r}')
+              upload = False
+          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as output:
+              output.write(f"upload={'true' if upload else 'false'}\n")
+          PY
+
+  publish_pypi:
     name: publish the same artifacts to PyPI
-    needs: verify-testpypi
+    needs: check_pypi_state
+    if: needs.check_pypi_state.outputs.upload == 'true'
     runs-on: ubuntu-24.04
     environment:
       name: pypi
@@ -204,12 +455,16 @@ jobs:
         with:
           packages-dir: release-artifacts/dist/
 
-  verify-pypi-and-release:
-    name: verify PyPI and create GitHub release
-    needs: publish-pypi
+  verify_pypi_and_finalize_release:
+    name: verify PyPI and publish GitHub release
+    needs: [prepare_github_release, check_pypi_state, publish_pypi]
+    if: ${{ always() && needs.prepare_github_release.result == 'success' && needs.check_pypi_state.result == 'success' && (needs.publish_pypi.result == 'success' || needs.publish_pypi.result == 'skipped') }}
     runs-on: ubuntu-24.04
     permissions:
       contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
     steps:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
@@ -222,37 +477,118 @@ jobs:
         run: |
           python - <<'PY'
           import hashlib, json, pathlib, time, urllib.request
-          expected = {p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in pathlib.Path('release-artifacts/dist').iterdir()}
+
+          expected_paths = {
+              path.name: path
+              for path in pathlib.Path('release-artifacts/dist').iterdir()
+              if path.is_file()
+          }
+          expected = {name: hashlib.sha256(path.read_bytes()).hexdigest() for name, path in expected_paths.items()}
           url = 'https://pypi.org/pypi/metrifid/0.2.1/json'
-          for _ in range(30):
+          for _ in range(90):
               try:
-                  data = json.load(urllib.request.urlopen(url, timeout=20))
-                  observed = {row['filename']: row['digests']['sha256'] for row in data['urls']}
+                  with urllib.request.urlopen(url, timeout=20) as response:
+                      data = json.load(response)
+                  rows = {row['filename']: row for row in data['urls']}
+                  observed = {name: row['digests']['sha256'] for name, row in rows.items()}
                   if observed == expected:
                       break
               except Exception:
                   pass
               time.sleep(10)
           else:
-              raise SystemExit('PyPI artifacts or hashes did not match')
+              raise SystemExit('PyPI artifacts or hashes did not match within 15 minutes')
+          download = pathlib.Path('pypi-download')
+          download.mkdir()
+          for name, row in rows.items():
+              target = download / name
+              with urllib.request.urlopen(row['url'], timeout=60) as response:
+                  target.write_bytes(response.read())
+              if hashlib.sha256(target.read_bytes()).hexdigest() != expected[name]:
+                  raise SystemExit(f'PyPI downloaded bytes differ for {name}')
           PY
-          python -m venv public-venv
-          public-venv/bin/python -m pip install --no-cache-dir metrifid==0.2.1
-          public-venv/bin/metrifid --help
-          public-venv/bin/metrifid certify --help
-          public-venv/bin/metrifid compare --help
-          public-venv/bin/metrifid audit-timestep --help
-          public-venv/bin/python -c 'import metrifid; assert metrifid.__version__ == "0.2.1"'
-          mkdir public-demo && cd public-demo
-          ../public-venv/bin/python -m metrifid.demo
-      - name: Create GitHub release from the verified artifacts
-        env:
-          GH_TOKEN: ${{ github.token }}
+          PUBLIC_VENV="$RUNNER_TEMP/metrifid-public-venv"
+          rm -rf "$PUBLIC_VENV"
+          python -m venv "$PUBLIC_VENV"
+          "$PUBLIC_VENV/bin/python" -m pip install --no-cache-dir metrifid==0.2.1
+          "$PUBLIC_VENV/bin/python" -m pip check
+          "$PUBLIC_VENV/bin/metrifid" --help
+          "$PUBLIC_VENV/bin/metrifid" certify --help
+          "$PUBLIC_VENV/bin/metrifid" compare --help
+          "$PUBLIC_VENV/bin/metrifid" audit-timestep --help
+          "$PUBLIC_VENV/bin/python" - <<'PY'
+          import metrifid
+          from metrifid.certify import certify_models, load_and_validate_certification_receipt
+          from metrifid.compare import compare_configuration_file
+          from metrifid.timestep_audit import audit_configuration_file
+          assert metrifid.__version__ == '0.2.1'
+          assert callable(certify_models)
+          assert callable(load_and_validate_certification_receipt)
+          assert callable(compare_configuration_file)
+          assert callable(audit_configuration_file)
+          PY
+          rm -rf "$RUNNER_TEMP/metrifid-public-demo"
+          mkdir -p "$RUNNER_TEMP/metrifid-public-demo"
+          cd "$RUNNER_TEMP/metrifid-public-demo"
+          "$PUBLIC_VENV/bin/python" -m metrifid.demo
+      - name: Publish or verify the GitHub release
         run: |
-          gh release create 0.2.1 \
-            release-artifacts/dist/metrifid-0.2.1-py3-none-any.whl \
-            release-artifacts/dist/metrifid-0.2.1.tar.gz \
-            release-artifacts/SHA256SUMS.txt \
-            release-artifacts/release-evidence.json \
-            --title "Metrifid 0.2.1" \
-            --notes-file release-artifacts/RELEASE_NOTES.md
+          set -euo pipefail
+          RELEASE_JSON="$RUNNER_TEMP/metrifid-release-after-pypi.json"
+          gh release view "$RELEASE_VERSION" \
+            --repo "$GH_REPO" \
+            --json tagName,isDraft,isPrerelease,name,body > "$RELEASE_JSON"
+          DRAFT=$(RELEASE_JSON="$RELEASE_JSON" python - <<'PY'
+          import json, os, pathlib
+          release = json.loads(pathlib.Path(os.environ['RELEASE_JSON']).read_text(encoding='utf-8'))
+          notes = pathlib.Path('release-artifacts/RELEASE_NOTES.md').read_text(encoding='utf-8')
+          assert release['tagName'] == '0.2.1', release
+          assert release['name'] == 'Metrifid 0.2.1', release
+          assert release['body'].strip() == notes.strip(), release
+          assert release['isPrerelease'] is False, release
+          print('true' if release['isDraft'] else 'false')
+          PY
+          )
+          if [ "$DRAFT" = "true" ]; then
+            gh release edit "$RELEASE_VERSION" --repo "$GH_REPO" --draft=false
+          fi
+          gh release view "$RELEASE_VERSION" \
+            --repo "$GH_REPO" \
+            --json tagName,isDraft,isPrerelease,name,body > "$RELEASE_JSON"
+          RELEASE_JSON="$RELEASE_JSON" python - <<'PY'
+          import json, os, pathlib
+          release = json.loads(pathlib.Path(os.environ['RELEASE_JSON']).read_text(encoding='utf-8'))
+          notes = pathlib.Path('release-artifacts/RELEASE_NOTES.md').read_text(encoding='utf-8')
+          assert release['tagName'] == '0.2.1', release
+          assert release['name'] == 'Metrifid 0.2.1', release
+          assert release['body'].strip() == notes.strip(), release
+          assert release['isDraft'] is False, release
+          assert release['isPrerelease'] is False, release
+          PY
+          rm -rf "$RUNNER_TEMP/metrifid-release-assets"
+          mkdir -p "$RUNNER_TEMP/metrifid-release-assets"
+          gh release download "$RELEASE_VERSION" \
+            --repo "$GH_REPO" \
+            --dir "$RUNNER_TEMP/metrifid-release-assets"
+          RELEASE_ASSETS="$RUNNER_TEMP/metrifid-release-assets" python - <<'PY'
+          import hashlib, os, pathlib
+
+          expected_names = {
+              'metrifid-0.2.1-py3-none-any.whl',
+              'metrifid-0.2.1.tar.gz',
+              'SHA256SUMS.txt',
+              'release-evidence.json',
+          }
+          expected = {}
+          for path in pathlib.Path('release-artifacts').rglob('*'):
+              if path.is_file() and path.name in expected_names:
+                  expected[path.name] = hashlib.sha256(path.read_bytes()).hexdigest()
+          observed_dir = pathlib.Path(os.environ['RELEASE_ASSETS'])
+          observed = {
+              path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+              for path in observed_dir.iterdir()
+              if path.is_file()
+          }
+          assert set(expected) == expected_names, expected
+          assert observed == expected, (observed, expected)
+          PY
