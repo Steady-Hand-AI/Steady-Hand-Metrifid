@@ -89,15 +89,30 @@ jobs:
           - id: linux_x64_py314
             runner: ubuntu-24.04
             python: "3.14"
+          - id: macos_arm64_py311
+            runner: macos-15
+            python: "3.11"
           - id: macos_arm64_py312
             runner: macos-15
             python: "3.12"
+          - id: macos_arm64_py313
+            runner: macos-15
+            python: "3.13"
           - id: macos_arm64_py314
             runner: macos-15
             python: "3.14"
+          - id: macos_x64_py311
+            runner: macos-15-intel
+            python: "3.11"
           - id: macos_x64_py312
             runner: macos-15-intel
             python: "3.12"
+          - id: macos_x64_py313
+            runner: macos-15-intel
+            python: "3.13"
+          - id: macos_x64_py314
+            runner: macos-15-intel
+            python: "3.14"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
@@ -431,9 +446,14 @@ jobs:
               "linux_x64_py313",
               "linux_x64_py314",
               "linux_x64_py311_numpy_min",
+              "macos_arm64_py311",
               "macos_arm64_py312",
+              "macos_arm64_py313",
               "macos_arm64_py314",
+              "macos_x64_py311",
               "macos_x64_py312",
+              "macos_x64_py313",
+              "macos_x64_py314",
           }
           root = Path("lane-artifacts")
           lane_dirs = {path.name.removeprefix("lane-"): path for path in root.glob("lane-*") if path.is_dir()}
