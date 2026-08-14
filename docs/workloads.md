@@ -28,6 +28,10 @@ or symlink. They acquire the final name with a descriptor-relative no-clobber ha
 verification fails after that link exists, the writer refuses but preserves the linked artifact;
 failure cleanup removes only its private temporary.
 
+### Generating Workloads from Simulation
+
+While you can construct state and action arrays manually (see [`examples/compare/prepare_workload.py`](../examples/compare/prepare_workload.py)), you can also record standard trajectories directly from a live environment rollout. For a reference implementation demonstrating how to extract canonical `.npz` artifacts from a Gymnasium environment, see [`examples/workload/record_gymnasium_workload.py`](../examples/workload/record_gymnasium_workload.py).
+
 ## The time grid
 
 Time is exact, never floating point:

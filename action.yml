@@ -1,0 +1,79 @@
+name: "Metrifid Certify"
+description: "Proves whether two MJCF source trees compile to byte-identical binary MJB artifacts."
+
+inputs:
+  baseline_mjcf:
+    description: "Path to the baseline MJCF entrypoint"
+    required: true
+  candidate_mjcf:
+    description: "Path to the candidate MJCF entrypoint"
+    required: true
+  baseline_root:
+    description: "Explicit baseline model root directory (optional)"
+    required: false
+  candidate_root:
+    description: "Explicit candidate model root directory (optional)"
+    required: false
+  python_version:
+    description: "Python version to use for Metrifid"
+    required: false
+    default: "3.11"
+
+runs:
+  using: "composite"
+  steps:
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python_version }}
+
+    - name: Install Metrifid
+      shell: bash
+      run: |
+        python -m pip install --upgrade pip
+        # Install the action's checked-out code strictly, including exact mujoco bounds
+        python -m pip install "${{ github.action_path }}"
+
+    - name: Run Metrifid Certify
+      shell: bash
+      run: |
+        OUTPUT_DIR=$(mktemp -d)
+        
+        # Build command array safely
+        CMD=("metrifid" "certify")
+        CMD+=("${{ inputs.baseline_mjcf }}")
+        CMD+=("${{ inputs.candidate_mjcf }}")
+        CMD+=("--output" "$OUTPUT_DIR")
+        
+        if [ -n "${{ inputs.baseline_root }}" ]; then
+          CMD+=("--baseline-root" "${{ inputs.baseline_root }}")
+        fi
+        
+        if [ -n "${{ inputs.candidate_root }}" ]; then
+          CMD+=("--candidate-root" "${{ inputs.candidate_root }}")
+        fi
+        
+        echo "Running: ${CMD[@]}"
+        
+        # Run certify and capture exit code without failing the step immediately
+        set +e
+        "${CMD[@]}"
+        EXIT_CODE=$?
+        set -e
+        
+        # Output summary if generated
+        if [ -f "$OUTPUT_DIR/certification.md" ]; then
+          cat "$OUTPUT_DIR/certification.md" >> "$GITHUB_STEP_SUMMARY"
+        fi
+        
+        # Evaluate exit code
+        if [ $EXIT_CODE -eq 0 ]; then
+          echo "Certification passed (exit code 0)."
+          exit 0
+        elif [ $EXIT_CODE -eq 40 ] || [ $EXIT_CODE -eq 64 ] || [ $EXIT_CODE -eq 70 ]; then
+          echo "::error::Metrifid certify failed with exit code $EXIT_CODE."
+          exit 1
+        else
+          echo "::error::Metrifid certify failed with unexpected exit code $EXIT_CODE."
+          exit $EXIT_CODE
+        fi
