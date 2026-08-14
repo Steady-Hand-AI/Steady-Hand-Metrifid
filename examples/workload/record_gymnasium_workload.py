@@ -1,7 +1,7 @@
 """Example: Record standard Metrifid workload NPZ artifacts from a Gymnasium environment.
 
 This helper extracts the initial state and an open-loop action sequence from a Gymnasium
-MuJoCo environment rollout, writing canonical `state.npz` and `actions.npz` artifacts 
+MuJoCo environment rollout, writing canonical `state.npz` and `actions.npz` artifacts
 ready for `metrifid compare`.
 """
 
@@ -31,59 +31,59 @@ except ImportError:
 def export_workload(env_id: str, output_dir: Path, steps: int = 10) -> None:
     """Record an open-loop rollout and write the canonical workload artifacts."""
     output_dir.mkdir(parents=True, exist_ok=True)
-    
+
     env = gym.make(env_id)
     env.reset(seed=42)
-    
+
     unwrapped = env.unwrapped
     if not hasattr(unwrapped, "model") or not hasattr(unwrapped, "data"):
         raise ValueError(f"Environment '{env_id}' must expose MuJoCo 'model' and 'data'.")
-        
+
     model = unwrapped.model
     data = unwrapped.data
-    
+
     # 1. Determine joint properties
     joint_names = []
     qpos_offsets = [0]
     qvel_offsets = [0]
-    
+
     # JntType: 0=free, 1=ball, 2=slide, 3=hinge
     qpos_widths = {0: 7, 1: 4, 2: 1, 3: 1}
     qvel_widths = {0: 6, 1: 3, 2: 1, 3: 1}
-    
+
     for i in range(model.njnt):
         name = model.joint(i).name
         if not name:
             # Metrifid requires named joints for deterministic canonical alignment.
             raise ValueError(f"Joint {i} is unnamed. Metrifid requires named joints.")
         joint_names.append(name)
-        
+
         jtype = model.jnt_type[i]
         qpos_offsets.append(qpos_offsets[-1] + qpos_widths[jtype])
         qvel_offsets.append(qvel_offsets[-1] + qvel_widths[jtype])
-        
+
     # 2. Determine actuator properties
     actuator_names = []
     act_offsets = [0]
-    
+
     for i in range(model.nu):
         name = model.actuator(i).name
         if not name:
             raise ValueError(f"Actuator {i} is unnamed. Metrifid requires named actuators.")
         actuator_names.append(name)
-        
+
         # This example assumes zero activation state width (common for simple hands/grippers).
         # If using muscles or third-order actuators, read model.actuator_actnum[i].
         act_offsets.append(act_offsets[-1] + 0)
-        
+
     act_array = np.empty(0, dtype=np.float64)
     if data.act is not None and len(data.act) > 0:
         print("Warning: Model has activation state. Ensure act_offsets are mapped correctly.")
-        
+
     # Capture the initial canonical state for the workload
     initial_qpos = data.qpos.copy()
     initial_qvel = data.qvel.copy()
-    
+
     # Record the open-loop action sequence
     actions = []
     for _ in range(steps):
@@ -91,9 +91,9 @@ def export_workload(env_id: str, output_dir: Path, steps: int = 10) -> None:
         action = env.action_space.sample()
         actions.append(action)
         env.step(action)
-        
+
     actions_array = np.vstack(actions).astype(np.float64)
-    
+
     # 3. Write canonical NPZ artifacts
     state_path = output_dir / "state.npz"
     if not state_path.exists():
@@ -111,7 +111,7 @@ def export_workload(env_id: str, output_dir: Path, steps: int = 10) -> None:
         print(f"Wrote canonical state: {state_path}")
     else:
         print(f"Skipped existing: {state_path}")
-        
+
     actions_path = output_dir / "actions.npz"
     if not actions_path.exists():
         write_actions_artifact(
@@ -122,7 +122,7 @@ def export_workload(env_id: str, output_dir: Path, steps: int = 10) -> None:
         print(f"Wrote canonical actions: {actions_path}")
     else:
         print(f"Skipped existing: {actions_path}")
-        
+
     print("\nWorkload successfully generated! You can now reference these in comparison.json.")
 
 
@@ -145,7 +145,7 @@ if __name__ == "__main__":
         help="Number of control steps to record",
     )
     args = parser.parse_args()
-    
+
     try:
         export_workload(args.env, Path(args.output), args.steps)
     except Exception as exc:
