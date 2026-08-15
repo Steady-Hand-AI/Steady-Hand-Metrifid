@@ -42,20 +42,7 @@ exit 40  NOT_CERTIFIED_COMPILED_DIFFERS   at least one byte differed
 It runs no workload, needs no initial state, no actions and no tolerances, and never steps the
 simulation.
 
-## Using the GitHub Action
 
-You can easily integrate `metrifid certify` into your CI/CD pipeline to prevent compiled-artifact regressions in your pull requests. This repository doubles as a composite GitHub Action.
-
-```yaml
-- name: Metrifid Certify
-  uses: Steady-Hand-AI/Steady-Hand-Metrifid@v0.2.1
-  with:
-    baseline_mjcf: baseline/model.xml
-    candidate_mjcf: candidate/model.xml
-    python_version: "3.11"
-```
-
-The action will fail the step if the models compile differently, and it will automatically post the markdown receipt directly into your `$GITHUB_STEP_SUMMARY`. For a real-world example, see [`examples/github_actions/menagerie_pr_check.yml`](https://github.com/Steady-Hand-AI/Steady-Hand-Metrifid/blob/main/examples/github_actions/menagerie_pr_check.yml).
 
 ## Try the source-checkout example
 
@@ -137,8 +124,8 @@ evidence only, so there is no allowlist. Native Windows is unsupported because t
 are absent; WSL is the documented route.
 
 The package metadata has no artificial Python upper bound. Release CI is configured for CPython
-3.11–3.14 on Linux x86_64, CPython 3.12 and 3.14 on macOS arm64, and CPython 3.12 on macOS
-x86_64. A tuple is described as validated only after that exact lane passes; a future Python minor
+3.11–3.14 on Linux x86_64, macOS arm64, and macOS x86_64, as well as a dedicated minimum-NumPy
+lane. A tuple is described as validated only after that exact lane passes; a future Python minor
 or another implementation is not rejected solely by its name or version, but is not described as
 validated without native evidence.
 

@@ -159,6 +159,25 @@ jobs:
           python examples/certify/run_example.py > lane-evidence/example.log
           cat lane-evidence/example.log
 
+      - name: Gymnasium workload helper end-to-end
+        run: |
+          python -m pip install gymnasium
+          mkdir -p lane-evidence/workload
+          python examples/workload/record_gymnasium_workload.py --env HalfCheetah-v5 --output lane-evidence/workload --steps 5
+          python - <<'PY'
+          import numpy as np
+          from pathlib import Path
+          
+          state = np.load("lane-evidence/workload/state.npz")
+          actions = np.load("lane-evidence/workload/actions.npz")
+          
+          assert "qpos_offsets" in state
+          assert "qvel_offsets" in state
+          assert "actuator_names" in actions
+          assert "values" in actions
+          print("Workload helper executed and artifacts loaded successfully!")
+          PY
+
       - name: CLI help smoke
         run: |
           {
@@ -425,7 +444,7 @@ jobs:
 
   release_matrix_summary:
     name: release compatibility summary
-    needs: [matrix_lane, minimum_dependency_lane, sdist_install_lane, distribution_equivalence]
+    needs: [matrix_lane, minimum_dependency_lane, sdist_install_lane, distribution_equivalence, test_composite_action]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
@@ -585,3 +604,144 @@ jobs:
 
       - name: MJB characterization (29 checks, lane-local)
         run: python tools/mjb_characterization.py
+
+  test_composite_action:
+    name: test the composite action integration
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Create real Metrifid fixtures
+        run: |
+          mkdir -p fixtures/baseline fixtures/candidate
+          cat << 'EOF' > fixtures/baseline/model.xml
+          <mujoco>
+            <worldbody>
+              <geom size="1" type="sphere"/>
+            </worldbody>
+          </mujoco>
+          EOF
+          cp fixtures/baseline/model.xml fixtures/candidate/model.xml
+          cat << 'EOF' > fixtures/candidate/changed.xml
+          <mujoco>
+            <worldbody>
+              <geom size="2" type="sphere"/>
+            </worldbody>
+          </mujoco>
+          EOF
+          
+          # For testing adversarial inputs
+          mkdir -p 'fixtures/adverse/; $(echo injected);/dir'
+          cp fixtures/baseline/model.xml 'fixtures/adverse/; $(echo injected);/dir/model.xml'
+
+          # For testing leading dash inputs
+          cp fixtures/baseline/model.xml "-model.xml"
+
+      - name: Test valid model equivalence (Exit 0)
+        id: test_0
+        uses: ./
+        with:
+          baseline_mjcf: fixtures/baseline/model.xml
+          candidate_mjcf: fixtures/candidate/model.xml
+          python_version: "3.11"
+          
+      - name: Verify Exit 0 Outputs
+        run: |
+          if [ "${{ steps.test_0.outputs.exit_code }}" != "0" ]; then exit 1; fi
+          if [ "${{ steps.test_0.outputs.status }}" != "certified_compiled_equivalence" ]; then exit 1; fi
+
+      - name: Test physical difference (Exit 40)
+        id: test_40
+        uses: ./
+        continue-on-error: true
+        with:
+          baseline_mjcf: fixtures/baseline/model.xml
+          candidate_mjcf: fixtures/candidate/changed.xml
+          python_version: "3.11"
+
+      - name: Verify Exit 40 Outputs
+        run: |
+          if [ "${{ steps.test_40.outcome }}" != "failure" ]; then exit 1; fi
+          if [ "${{ steps.test_40.outputs.exit_code }}" != "40" ]; then exit 1; fi
+          if [ "${{ steps.test_40.outputs.status }}" != "not_certified_compiled_differs" ]; then exit 1; fi
+
+      - name: Test adversarial path inputs
+        id: test_adverse
+        uses: ./
+        with:
+          baseline_mjcf: fixtures/baseline/model.xml
+          candidate_mjcf: 'fixtures/adverse/; $(echo injected);/dir/model.xml'
+          python_version: "3.11"
+          
+      - name: Verify adversarial outputs
+        run: |
+          if [ "${{ steps.test_adverse.outputs.exit_code }}" != "0" ]; then exit 1; fi
+
+      - name: Test leading dash paths
+        id: test_dash
+        uses: ./
+        with:
+          baseline_mjcf: "-model.xml"
+          candidate_mjcf: "-model.xml"
+          python_version: "3.11"
+
+      - name: Verify leading dash outputs
+        run: |
+          if [ "${{ steps.test_dash.outputs.exit_code }}" != "0" ]; then exit 1; fi
+
+      - name: Inject Stub for 64 and 70
+        run: |
+          cat << 'EOF' > /tmp/metrifid_stub.sh
+          metrifid() {
+            if [[ "$*" == *stub_64* ]]; then return 64; fi
+            if [[ "$*" == *stub_70* ]]; then return 70; fi
+            command metrifid "$@"
+          }
+          export -f metrifid
+          EOF
+          echo "BASH_ENV=/tmp/metrifid_stub.sh" >> $GITHUB_ENV
+
+      - name: Test stub 64
+        id: test_64
+        uses: ./
+        continue-on-error: true
+        with:
+          baseline_mjcf: stub_64
+          candidate_mjcf: stub_64
+          python_version: "3.11"
+
+      - name: Verify stub 64
+        run: |
+          if [ "${{ steps.test_64.outcome }}" != "failure" ]; then exit 1; fi
+          if [ "${{ steps.test_64.outputs.exit_code }}" != "64" ]; then exit 1; fi
+          if [ "${{ steps.test_64.outputs.status }}" != "refused" ]; then exit 1; fi
+
+      - name: Test stub 70
+        id: test_70
+        uses: ./
+        continue-on-error: true
+        with:
+          baseline_mjcf: stub_70
+          candidate_mjcf: stub_70
+          python_version: "3.11"
+
+      - name: Verify stub 70
+        run: |
+          if [ "${{ steps.test_70.outcome }}" != "failure" ]; then exit 1; fi
+          if [ "${{ steps.test_70.outputs.exit_code }}" != "70" ]; then exit 1; fi
+          if [ "${{ steps.test_70.outputs.status }}" != "operational_error" ]; then exit 1; fi
+
+      - name: Delete git directory to simulate remote unpacked action
+        run: rm -rf .git
+
+      - name: Test remote action identity
+        id: test_remote
+        uses: ./
+        with:
+          baseline_mjcf: fixtures/baseline/model.xml
+          candidate_mjcf: fixtures/candidate/model.xml
+          python_version: "3.11"
+
+      - name: Verify remote outputs
+        run: |
+          if [ "${{ steps.test_remote.outputs.exit_code }}" != "0" ]; then exit 1; fi

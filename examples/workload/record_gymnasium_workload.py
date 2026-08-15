@@ -8,8 +8,11 @@ ready for `metrifid compare`.
 from __future__ import annotations
 
 import argparse
+import shutil
 import sys
+import tempfile
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 
@@ -28,41 +31,20 @@ except ImportError:
     sys.exit(1)
 
 
-def export_workload(env_id: str, output_dir: Path, steps: int = 10) -> None:
-    """Record an open-loop rollout and write the canonical workload artifacts."""
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    env = gym.make(env_id)
-    env.reset(seed=42)
-
-    unwrapped = env.unwrapped
-    if not hasattr(unwrapped, "model") or not hasattr(unwrapped, "data"):
-        raise ValueError(f"Environment '{env_id}' must expose MuJoCo 'model' and 'data'.")
-
-    model = unwrapped.model
-    data = unwrapped.data
-
-    # 1. Determine joint properties
+def _get_joint_properties(model: Any) -> tuple[list[str], list[int], list[int]]:
     joint_names = []
-    qpos_offsets = [0]
-    qvel_offsets = [0]
-
-    # JntType: 0=free, 1=ball, 2=slide, 3=hinge
-    qpos_widths = {0: 7, 1: 4, 2: 1, 3: 1}
-    qvel_widths = {0: 6, 1: 3, 2: 1, 3: 1}
-
     for i in range(model.njnt):
         name = model.joint(i).name
         if not name:
-            # Metrifid requires named joints for deterministic canonical alignment.
             raise ValueError(f"Joint {i} is unnamed. Metrifid requires named joints.")
         joint_names.append(name)
 
-        jtype = model.jnt_type[i]
-        qpos_offsets.append(qpos_offsets[-1] + qpos_widths[jtype])
-        qvel_offsets.append(qvel_offsets[-1] + qvel_widths[jtype])
+    qpos_offsets = [int(v) for v in model.jnt_qposadr] + [int(model.nq)]
+    qvel_offsets = [int(v) for v in model.jnt_dofadr] + [int(model.nv)]
+    return joint_names, qpos_offsets, qvel_offsets
 
-    # 2. Determine actuator properties
+
+def _get_actuator_properties(model: Any, data: Any) -> tuple[list[str], list[int], np.ndarray]:
     actuator_names = []
     act_offsets = [0]
 
@@ -71,32 +53,85 @@ def export_workload(env_id: str, output_dir: Path, steps: int = 10) -> None:
         if not name:
             raise ValueError(f"Actuator {i} is unnamed. Metrifid requires named actuators.")
         actuator_names.append(name)
+        act_offsets.append(act_offsets[-1] + int(model.actuator_actnum[i]))
 
-        # This example assumes zero activation state width (common for simple hands/grippers).
-        # If using muscles or third-order actuators, read model.actuator_actnum[i].
-        act_offsets.append(act_offsets[-1] + 0)
-
-    act_array = np.empty(0, dtype=np.float64)
     if data.act is not None and len(data.act) > 0:
-        print("Warning: Model has activation state. Ensure act_offsets are mapped correctly.")
+        act_array = data.act.copy()
+        if act_offsets[-1] != len(act_array):
+            raise ValueError(
+                f"Activation array length ({len(act_array)}) does not match calculated total actuator_actnum ({act_offsets[-1]})."
+            )
+    else:
+        act_array = np.empty(0, dtype=np.float64)
+        if act_offsets[-1] != 0:
+            raise ValueError(
+                f"Model specifies {act_offsets[-1]} activation variables, but data.act is empty."
+            )
 
-    # Capture the initial canonical state for the workload
-    initial_qpos = data.qpos.copy()
-    initial_qvel = data.qvel.copy()
+    return actuator_names, act_offsets, act_array
 
-    # Record the open-loop action sequence
-    actions = []
-    for _ in range(steps):
-        # We sample a random action. In practice, you might provide a specific policy trace.
-        action = env.action_space.sample()
-        actions.append(action)
-        env.step(action)
 
-    actions_array = np.vstack(actions).astype(np.float64)
+def export_workload(env_id: str, output_dir: Path, steps: int = 10, seed: int = 42) -> None:
+    """Record an open-loop rollout and write the canonical workload artifacts."""
+    if not (1 <= steps <= 100000):
+        raise ValueError(f"--steps must be between 1 and 100000. Got: {steps}")
 
-    # 3. Write canonical NPZ artifacts
-    state_path = output_dir / "state.npz"
-    if not state_path.exists():
+    if output_dir.exists():
+        raise FileExistsError(f"--output must not already exist: {output_dir}")
+
+    staging_dir = Path(
+        tempfile.mkdtemp(dir=output_dir.parent, prefix=output_dir.name + "_staging_")
+    )
+    env = gym.make(env_id)
+
+    try:
+        env.action_space.seed(seed)
+        env.reset(seed=seed)
+
+        unwrapped = env.unwrapped
+        if not hasattr(unwrapped, "model") or not hasattr(unwrapped, "data"):
+            raise ValueError(f"Environment '{env_id}' must expose MuJoCo 'model' and 'data'.")
+
+        model = unwrapped.model
+        data = unwrapped.data
+
+        print(f"Environment: {env_id}")
+        print(f"Gymnasium: {gym.__version__}")
+        try:
+            import mujoco
+
+            print(f"MuJoCo: {mujoco.__version__}")
+        except ImportError:
+            pass
+        print(f"Seed: {seed}")
+        print(
+            f"Control period (dt): {model.opt.timestep * getattr(unwrapped, 'frame_skip', 1):.5f}s"
+        )
+        print(f"Requested steps: {steps}")
+
+        joint_names, qpos_offsets, qvel_offsets = _get_joint_properties(model)
+        actuator_names, act_offsets, act_array = _get_actuator_properties(model, data)
+
+        # Capture the initial canonical state for the workload
+        initial_qpos = data.qpos.copy()
+        initial_qvel = data.qvel.copy()
+
+        # Record the open-loop action sequence
+        actions = []
+        for _ in range(steps):
+            # We sample a random action. In practice, you might provide a specific policy trace.
+            action = env.action_space.sample()
+            actions.append(action)
+            _, _, terminated, truncated, _ = env.step(action)
+            if terminated or truncated:
+                print(
+                    "Warning: Environment terminated or truncated before requested steps completed. Continuing open-loop sequence intentionally."
+                )
+
+        actions_array = np.vstack(actions).astype(np.float64)
+
+        # 3. Write canonical NPZ artifacts to staging directory
+        state_path = staging_dir / "state.npz"
         write_state_artifact(
             state_path,
             joint_names=joint_names,
@@ -108,30 +143,32 @@ def export_workload(env_id: str, output_dir: Path, steps: int = 10) -> None:
             act_offsets=act_offsets,
             act=act_array,
         )
-        print(f"Wrote canonical state: {state_path}")
-    else:
-        print(f"Skipped existing: {state_path}")
 
-    actions_path = output_dir / "actions.npz"
-    if not actions_path.exists():
+        actions_path = staging_dir / "actions.npz"
         write_actions_artifact(
             actions_path,
             actuator_names=actuator_names,
             values=actions_array,
         )
-        print(f"Wrote canonical actions: {actions_path}")
-    else:
-        print(f"Skipped existing: {actions_path}")
 
-    print("\nWorkload successfully generated! You can now reference these in comparison.json.")
+        # Atomically rename to final destination
+        staging_dir.rename(output_dir)
+        print(f"\nWorkload successfully generated in: {output_dir}")
+        print("You can now reference these artifacts in comparison.json.")
+
+    except Exception:
+        shutil.rmtree(staging_dir, ignore_errors=True)
+        raise
+    finally:
+        env.close()
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Record a Gymnasium workload for Metrifid.")
     parser.add_argument(
         "--env",
-        default="Ant-v4",
-        help="Gymnasium MuJoCo environment ID (e.g., Ant-v4)",
+        default="HalfCheetah-v5",
+        help="Gymnasium MuJoCo environment ID (e.g., HalfCheetah-v5)",
     )
     parser.add_argument(
         "--output",
@@ -144,10 +181,16 @@ if __name__ == "__main__":
         default=10,
         help="Number of control steps to record",
     )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=42,
+        help="Random seed for the environment and action space",
+    )
     args = parser.parse_args()
 
     try:
-        export_workload(args.env, Path(args.output), args.steps)
+        export_workload(args.env, Path(args.output), args.steps, args.seed)
     except Exception as exc:
         print(f"Failed to record workload: {exc}", file=sys.stderr)
         sys.exit(1)

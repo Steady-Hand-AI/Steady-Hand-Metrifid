@@ -19,47 +19,78 @@ inputs:
     required: false
     default: "3.11"
 
+outputs:
+  exit_code:
+    description: "The raw exit code of the metrifid certify command."
+    value: ${{ steps.certify.outputs.exit_code }}
+  status:
+    description: "The status of the certification (certified_compiled_equivalence, not_certified_compiled_differs, refused, operational_error, unexpected_failure)."
+    value: ${{ steps.certify.outputs.status }}
+
 runs:
   using: "composite"
   steps:
     - name: Setup Python
-      uses: actions/setup-python@v5
+      uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
       with:
         python-version: ${{ inputs.python_version }}
 
     - name: Install Metrifid
       shell: bash
       run: |
-        python -m pip install --upgrade pip
-        # Install the action's checked-out code strictly, including exact mujoco bounds
-        python -m pip install "${{ github.action_path }}"
+        export PIP_CONSTRAINT="${{ github.action_path }}/.github/quality-constraints.txt"
+        python -m pip install -c "$PIP_CONSTRAINT" build
+        python -m build --wheel --outdir "${{ runner.temp }}/metrifid-action-wheel" "${{ github.action_path }}"
+        
+        WHEEL_PATH=$(ls "${{ runner.temp }}"/metrifid-action-wheel/*.whl)
+        python -m pip install -c "$PIP_CONSTRAINT" "$WHEEL_PATH"
+        
+        echo "=== Metrifid Installation Identity ==="
+        echo "Action repository: ${{ github.action_repository || 'local-checkout' }}"
+        echo "Action requested ref: ${{ github.action_ref || 'local-checkout' }}"
+        if [ -d "${{ github.action_path }}/.git" ]; then
+          echo "Action local checkout SHA: $(git -C "${{ github.action_path }}" rev-parse HEAD)"
+        else
+          echo "Action local checkout SHA: none (remote download)"
+        fi
+        python -c "import hashlib; print('Wheel SHA-256:', hashlib.sha256(open('$WHEEL_PATH', 'rb').read()).hexdigest())"
+        python -c "import metrifid, sys; print('metrifid version:', metrifid.__version__)"
+        python -c "import mujoco; print('mujoco version:', mujoco.__version__)"
+        echo "Pip Check Result:"
+        python -m pip check
 
     - name: Run Metrifid Certify
+      id: certify
       shell: bash
+      env:
+        BASELINE_MJCF: ${{ inputs.baseline_mjcf }}
+        CANDIDATE_MJCF: ${{ inputs.candidate_mjcf }}
+        BASELINE_ROOT: ${{ inputs.baseline_root }}
+        CANDIDATE_ROOT: ${{ inputs.candidate_root }}
       run: |
         OUTPUT_DIR=$(mktemp -d)
         
-        # Build command array safely
-        CMD=("metrifid" "certify")
-        CMD+=("${{ inputs.baseline_mjcf }}")
-        CMD+=("${{ inputs.candidate_mjcf }}")
-        CMD+=("--output" "$OUTPUT_DIR")
+        cmd=(
+          metrifid certify
+          --output "$OUTPUT_DIR"
+        )
         
-        if [ -n "${{ inputs.baseline_root }}" ]; then
-          CMD+=("--baseline-root" "${{ inputs.baseline_root }}")
-        fi
+        [[ -n "$BASELINE_ROOT" ]] && cmd+=(--baseline-root "$BASELINE_ROOT")
+        [[ -n "$CANDIDATE_ROOT" ]] && cmd+=(--candidate-root "$CANDIDATE_ROOT")
         
-        if [ -n "${{ inputs.candidate_root }}" ]; then
-          CMD+=("--candidate-root" "${{ inputs.candidate_root }}")
-        fi
+        cmd+=(-- "$BASELINE_MJCF" "$CANDIDATE_MJCF")
         
-        echo "Running: ${CMD[@]}"
+        printf 'Running:'
+        printf ' %q' "${cmd[@]}"
+        printf '\n'
         
         # Run certify and capture exit code without failing the step immediately
         set +e
-        "${CMD[@]}"
+        "${cmd[@]}"
         EXIT_CODE=$?
         set -e
+        
+        echo "exit_code=$EXIT_CODE" >> "$GITHUB_OUTPUT"
         
         # Output summary if generated
         if [ -f "$OUTPUT_DIR/certification.md" ]; then
@@ -68,12 +99,23 @@ runs:
         
         # Evaluate exit code
         if [ $EXIT_CODE -eq 0 ]; then
+          echo "status=certified_compiled_equivalence" >> "$GITHUB_OUTPUT"
           echo "Certification passed (exit code 0)."
           exit 0
-        elif [ $EXIT_CODE -eq 40 ] || [ $EXIT_CODE -eq 64 ] || [ $EXIT_CODE -eq 70 ]; then
-          echo "::error::Metrifid certify failed with exit code $EXIT_CODE."
+        elif [ $EXIT_CODE -eq 40 ]; then
+          echo "status=not_certified_compiled_differs" >> "$GITHUB_OUTPUT"
+          echo "::error::Metrifid certify failed: compiled models differ (exit code 40)."
+          exit 1
+        elif [ $EXIT_CODE -eq 64 ]; then
+          echo "status=refused" >> "$GITHUB_OUTPUT"
+          echo "::error::Metrifid certify refused execution (exit code 64)."
+          exit 1
+        elif [ $EXIT_CODE -eq 70 ]; then
+          echo "status=operational_error" >> "$GITHUB_OUTPUT"
+          echo "::error::Metrifid certify operational error (exit code 70)."
           exit 1
         else
+          echo "status=unexpected_failure" >> "$GITHUB_OUTPUT"
           echo "::error::Metrifid certify failed with unexpected exit code $EXIT_CODE."
           exit $EXIT_CODE
         fi
