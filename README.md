@@ -42,6 +42,8 @@ exit 40  NOT_CERTIFIED_COMPILED_DIFFERS   at least one byte differed
 It runs no workload, needs no initial state, no actions and no tolerances, and never steps the
 simulation.
 
+
+
 ## Try the source-checkout example
 
 From a clone of the [Metrifid repository](https://github.com/Steady-Hand-AI/Steady-Hand-Metrifid):
@@ -122,8 +124,8 @@ evidence only, so there is no allowlist. Native Windows is unsupported because t
 are absent; WSL is the documented route.
 
 The package metadata has no artificial Python upper bound. Release CI is configured for CPython
-3.11–3.14 on Linux x86_64, CPython 3.12 and 3.14 on macOS arm64, and CPython 3.12 on macOS
-x86_64. A tuple is described as validated only after that exact lane passes; a future Python minor
+3.11–3.14 on Linux x86_64, macOS arm64, and macOS x86_64, as well as a dedicated minimum-NumPy
+lane. A tuple is described as validated only after that exact lane passes; a future Python minor
 or another implementation is not rejected solely by its name or version, but is not described as
 validated without native evidence.
 
