@@ -63,9 +63,9 @@ def test_operational_registries_are_exact_total_and_unique() -> None:
     """
     assert [stage.value for stage in OperationalStage] == EXPECTED_STAGES
     assert [code.value for code in InputDigestCode] == EXPECTED_INPUTS
-    assert len(OperationalReasonCode) == 78
+    assert len(OperationalReasonCode) == 80
     assert set(OPERATIONAL_REASON_REGISTRY) == set(OperationalReasonCode)
-    assert len({code.value for code in OperationalReasonCode}) == 78
+    assert len({code.value for code in OperationalReasonCode}) == 80
     assert all(rule.code is code for code, rule in OPERATIONAL_REASON_REGISTRY.items())
 
 
@@ -278,7 +278,12 @@ def test_the_pinned_triples_cover_every_reason_declared_before_the_certify_pass(
     pinned = {name for name, _, _ in PREEXISTING_REASON_TRIPLES}
     assert len(pinned) == len(PREEXISTING_REASON_TRIPLES) == 76
     added = {code.value for code in OperationalReasonCode} - pinned
-    assert added == {"COMPILED_ARTIFACT_INVALID", "COMPILED_ARTIFACT_SIZE_EXCEEDED"}
+    assert added == {
+        "COMPILED_ARTIFACT_INVALID",
+        "COMPILED_ARTIFACT_SIZE_EXCEEDED",
+        "MUJOCO_RUNTIME_CAPABILITY_MISSING",
+        "MUJOCO_FEATURE_COVERAGE_INCOMPLETE",
+    }
 
 
 def test_the_certify_reasons_are_appended_after_every_preexisting_reason() -> None:
@@ -303,3 +308,24 @@ def test_the_registry_binds_each_reason_exactly_once() -> None:
     """
     assert set(OPERATIONAL_REASON_REGISTRY) == set(OperationalReasonCode)
     assert len(OPERATIONAL_REASON_REGISTRY) == len(list(OperationalReasonCode))
+
+
+def test_runtime_compatibility_reasons_are_appended_with_required_bindings() -> None:
+    """Pin rolling-runtime refusals after every accepted operational-reason member."""
+    declared = list(OperationalReasonCode)
+    assert declared[-2:] == [
+        OperationalReasonCode.MUJOCO_RUNTIME_CAPABILITY_MISSING,
+        OperationalReasonCode.MUJOCO_FEATURE_COVERAGE_INCOMPLETE,
+    ]
+    assert (
+        OperationalReasonCode.MUJOCO_RUNTIME_CAPABILITY_MISSING.stage
+        is OperationalStage.ENVIRONMENT
+    )
+    assert (
+        OperationalReasonCode.MUJOCO_FEATURE_COVERAGE_INCOMPLETE.stage
+        is OperationalStage.SEMANTIC_IDENTITY
+    )
+    assert all(
+        code.exit_code is OperationalExitCode.INVALID_INVOCATION_INPUT_OUTPUT
+        for code in declared[-2:]
+    )

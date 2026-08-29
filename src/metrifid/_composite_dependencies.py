@@ -134,7 +134,7 @@ class _CompositeModel:
 
 
 def _compiler_relative_join(base: Path, directory: str, token: str, strippath: bool) -> Path:
-    """Join one asset token the way the MuJoCo 3.10.0 compiler does."""
+    """Join one asset token the way the admitted MuJoCo compiler does."""
     name = posixpath.basename(token.replace("\\", "/")) if strippath else token
     if not name:
         raise _AssetResolutionError("empty asset file token")

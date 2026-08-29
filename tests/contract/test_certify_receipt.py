@@ -5,7 +5,7 @@ from __future__ import annotations
 import copy
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -71,7 +71,7 @@ def differing_output(tmp_path_factory: pytest.TempPathFactory) -> Path:
 
 def _load_receipt_json(path: Path) -> dict[str, Any]:
     """Decode a published certification receipt for contract assertions."""
-    return json.loads(path.read_text(encoding="utf-8"))
+    return cast("dict[str, Any]", json.loads(path.read_text(encoding="utf-8")))
 
 
 _DECISION_NAMES = (
@@ -116,97 +116,6 @@ def _tampered(receipt: dict[str, Any], mutate: Any) -> dict[str, Any]:
     copied = copy.deepcopy(receipt)
     mutate(copied)
     return _resealed(copied)
-
-
-_CERTIFIED_TAMPERS: tuple[tuple[str, Any], ...] = (
-    (
-        "runtime self-hash",
-        lambda r: r["runtime_identity"].__setitem__("runtime_identity_sha256", "0" * 64),
-    ),
-    (
-        "runtime header word",
-        lambda r: r["runtime_identity"].__setitem__(
-            "mjb_header_words", [54321, 8, 92, 3010000, 472]
-        ),
-    ),
-    (
-        "runtime execution mode",
-        lambda r: r["runtime_identity"].__setitem__("execution_mode", "STEPPED"),
-    ),
-    (
-        "artifact runtime binding",
-        lambda r: r["baseline"]["compiled_artifact"].__setitem__(
-            "runtime_identity_sha256", "1" * 64
-        ),
-    ),
-    (
-        "artifact digest",
-        lambda r: r["candidate"]["compiled_artifact"].__setitem__("mjb_sha256", "2" * 64),
-    ),
-    (
-        "artifact size",
-        lambda r: r["baseline"]["compiled_artifact"].__setitem__("mjb_size_bytes", 999),
-    ),
-    (
-        "artifact method",
-        lambda r: r["baseline"]["compiled_artifact"].__setitem__(
-            "method", "SHA256_OF_SOMETHING_ELSE"
-        ),
-    ),
-    (
-        "artifact magic hex",
-        lambda r: r["baseline"]["compiled_artifact"].__setitem__("magic_hex", "0xdeadbeef"),
-    ),
-    (
-        "artifact mjtnum width",
-        lambda r: r["baseline"]["compiled_artifact"].__setitem__("sizeof_mjtnum", 4),
-    ),
-    (
-        "artifact version integer",
-        lambda r: r["baseline"]["compiled_artifact"].__setitem__("mujoco_version_integer", 3009000),
-    ),
-    (
-        "source closure total bytes",
-        lambda r: r["baseline"].__setitem__("source_closure_total_bytes", 1),
-    ),
-    (
-        "source closure digest",
-        lambda r: r["baseline"].__setitem__("source_closure_sha256", "3" * 64),
-    ),
-    ("role name", lambda r: r["baseline"].__setitem__("role", "candidate")),
-    (
-        "comparison size",
-        lambda r: r["byte_comparison"].__setitem__("baseline_mjb_size_bytes", 12345),
-    ),
-    ("comparison equal flag", lambda r: r["byte_comparison"].__setitem__("equal", False)),
-    (
-        "artifact claim statement",
-        lambda r: r["artifact_claim"].__setitem__("statement", "Everything is equivalent."),
-    ),
-    ("artifact claim exclusions", lambda r: r["artifact_claim"]["does_not_claim"].pop()),
-    ("implication premise", lambda r: r["behavior_implication"]["premises"].pop()),
-    (
-        "implication statement",
-        lambda r: r["behavior_implication"].__setitem__("statement", "It behaves the same."),
-    ),
-    (
-        "implication in decision hash",
-        lambda r: r["behavior_implication"].__setitem__("included_in_decision_sha256", True),
-    ),
-    (
-        "limitation statement",
-        lambda r: r["limitations"][0].__setitem__("statement", "No limits apply."),
-    ),
-    ("tool name", lambda r: r["tool"].__setitem__("name", "some_other_tool")),
-    (
-        "field report on a certificate",
-        lambda r: r.__setitem__(
-            "field_report", {"schema": "metrifid.compiled_field_report", "schema_version": 1}
-        ),
-    ),
-    ("unknown root field", lambda r: r.__setitem__("extra_root_field", 1)),
-    ("missing root field", lambda r: r.pop("limitations")),
-)
 
 
 _DIFFERING_TAMPERS: tuple[tuple[str, Any], ...] = (
@@ -255,7 +164,7 @@ def _require_field_report(receipt: dict[str, Any]) -> dict[str, Any]:
 
 def _first_changed(receipt: dict[str, Any]) -> dict[str, Any]:
     """Select the first reported public-field difference for focused mutations."""
-    return _require_field_report(receipt)["changed_fields"][0]
+    return cast("dict[str, Any]", _require_field_report(receipt)["changed_fields"][0])
 
 
 _EXIT_AND_TOOL_TAMPERS: tuple[tuple[str, Any], ...] = (

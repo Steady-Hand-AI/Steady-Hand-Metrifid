@@ -1,0 +1,50 @@
+{
+  "schema": "metrifid.native_upgrade_manifest",
+  "schema_version": 1,
+  "fixtures": [
+    {
+      "fixture_id": "smooth_pendulum",
+      "campaign_role": "MIGRATION_SUBJECT",
+      "baseline_fixture_id": "smooth_pendulum",
+      "xml_path": "model.xml",
+      "initial_qpos": [0.4],
+      "initial_qvel": [0.0],
+      "controls": [
+        {"start": 0.00, "end": 0.30, "values": [0.50]},
+        {"start": 0.30, "end": 0.70, "values": [-0.25]},
+        {"start": 0.70, "end": 1.00, "values": [0.10]}
+      ],
+      "control_dt": 0.02,
+      "horizon": 1.00,
+      "step_dts": [0.004, 0.002, 0.001],
+      "continuous_tolerance": 0.000001,
+      "so3_tolerance": 0.0000001,
+      "contact_event_time_tolerance": 0.02,
+      "minimum_common_prefix": 0.50,
+      "channels": [
+        {
+          "channel_id": "pendulum.theta.position",
+          "kind": "JOINT_POSITION",
+          "object_name": "theta",
+          "component": null,
+          "scale": 3.141592653589793
+        },
+        {
+          "channel_id": "pendulum.theta.sensor",
+          "kind": "SENSOR",
+          "object_name": "theta_position",
+          "component": 0,
+          "scale": 3.141592653589793
+        },
+        {
+          "channel_id": "pendulum.theta.velocity",
+          "kind": "JOINT_VELOCITY",
+          "object_name": "theta",
+          "component": null,
+          "scale": 10.0
+        }
+      ],
+      "contact_pairs": []
+    }
+  ]
+}

@@ -1,0 +1,10 @@
+<mujoco model="mesh-inertia-mode-change">
+  <asset>
+    <mesh name="concave_shape" file="concave_shape.obj" inertia="exact"/>
+  </asset>
+  <worldbody>
+    <body name="inertia_body">
+      <geom name="inertia_geom" type="mesh" mesh="concave_shape" density="1000"/>
+    </body>
+  </worldbody>
+</mujoco>

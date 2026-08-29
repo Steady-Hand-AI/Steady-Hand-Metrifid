@@ -1,0 +1,40 @@
+{
+  "baseline_profile": {
+    "mujoco_version": "3.10.0",
+    "profile_id": "A_3.10.0"
+  },
+  "candidate_profile": {
+    "mujoco_version": "3.11.0",
+    "profile_id": "B_3.11.0"
+  },
+  "cells": [
+    {"directory": "PLACEHOLDER_EVIDENCE/baseline_0p004_repeat_0", "profile_role": "baseline", "repeat_id": 0, "step_dt": "0.004"},
+    {"directory": "PLACEHOLDER_EVIDENCE/baseline_0p004_repeat_1", "profile_role": "baseline", "repeat_id": 1, "step_dt": "0.004"},
+    {"directory": "PLACEHOLDER_EVIDENCE/baseline_0p002_repeat_0", "profile_role": "baseline", "repeat_id": 0, "step_dt": "0.002"},
+    {"directory": "PLACEHOLDER_EVIDENCE/baseline_0p002_repeat_1", "profile_role": "baseline", "repeat_id": 1, "step_dt": "0.002"},
+    {"directory": "PLACEHOLDER_EVIDENCE/baseline_0p001_repeat_0", "profile_role": "baseline", "repeat_id": 0, "step_dt": "0.001"},
+    {"directory": "PLACEHOLDER_EVIDENCE/baseline_0p001_repeat_1", "profile_role": "baseline", "repeat_id": 1, "step_dt": "0.001"},
+    {"directory": "PLACEHOLDER_EVIDENCE/candidate_0p004_repeat_0", "profile_role": "candidate", "repeat_id": 0, "step_dt": "0.004"},
+    {"directory": "PLACEHOLDER_EVIDENCE/candidate_0p004_repeat_1", "profile_role": "candidate", "repeat_id": 1, "step_dt": "0.004"},
+    {"directory": "PLACEHOLDER_EVIDENCE/candidate_0p002_repeat_0", "profile_role": "candidate", "repeat_id": 0, "step_dt": "0.002"},
+    {"directory": "PLACEHOLDER_EVIDENCE/candidate_0p002_repeat_1", "profile_role": "candidate", "repeat_id": 1, "step_dt": "0.002"},
+    {"directory": "PLACEHOLDER_EVIDENCE/candidate_0p001_repeat_0", "profile_role": "candidate", "repeat_id": 0, "step_dt": "0.001"},
+    {"directory": "PLACEHOLDER_EVIDENCE/candidate_0p001_repeat_1", "profile_role": "candidate", "repeat_id": 1, "step_dt": "0.001"}
+  ],
+  "expected_subject": {
+    "fixture_id": "smooth_pendulum",
+    "fixture_manifest_sha256": "ed1a4eeaac03ee8f6bbd6aed28035d53859477c71c432e75494e58df6b6bcc61",
+    "source_closure_sha256": "642694dd5d6877af491b6319a31b83c5889577c2ddbb72743203f376e54add5d"
+  },
+  "expected_workload": {
+    "action_program_semantic_sha256": "1e50bb1d44d23ad13d03391c5ec8091f212593861785f55ffd9ceb1493d7fd4c",
+    "initial_state_semantic_sha256": "48d71ee22098316d79d5a0349c7f38622ea8ec3927e361ab96986c4940fc0a87",
+    "semantic_sha256": "a84e354af23b1f2aa1bbbf7b39ca0723fa95b172dc017a1645994e2efff72141"
+  },
+  "output_dir": "runtime_review_output",
+  "repeat_ids": [0, 1],
+  "required_horizon": "1",
+  "schema": "metrifid.runtime_review_config",
+  "schema_version": 1,
+  "step_dts": ["0.004", "0.002", "0.001"]
+}

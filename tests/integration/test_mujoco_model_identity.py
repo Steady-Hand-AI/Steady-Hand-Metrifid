@@ -12,7 +12,6 @@ import pytest
 
 from metrifid import _model_admission as admission
 from metrifid import _model_closure as closure
-from metrifid import _model_identity as identity
 from metrifid.json_values import canonical_json_bytes
 from metrifid.operational import OperationalReasonCode
 from metrifid.schemas import (
@@ -22,6 +21,7 @@ from metrifid.schemas import (
     JointAliasPair,
     TargetReference,
 )
+from tests._support.model_identity import build_model_pair_identity
 
 
 def _write(root: Path, xml: str, *, name: str = "model.xml") -> Path:
@@ -175,7 +175,7 @@ def test_identity_pair_and_reordered_declarations(tmp_path: Path) -> None:
       <body name="b1"><joint name="j1"/><geom size=".1" mass="1"/></body>
     </worldbody><actuator><motor name="a2" joint="j2"/><motor name="a1" joint="j1"/></actuator></mujoco>"""
     left, right = _pair(tmp_path, baseline, candidate)
-    result = identity.build_model_pair_identity(left, "model.xml", right, "model.xml")
+    result = build_model_pair_identity(left, "model.xml", right, "model.xml")
     assert result.alignment_summary.joint_order == ("j1", "j2")
     assert result.alignment_summary.actuator_order == ("a1", "a2")
     assert result.alignment.joints[0].baseline_qpos != result.alignment.joints[0].candidate_qpos
@@ -197,7 +197,7 @@ def test_all_joint_widths_and_slices(tmp_path: Path) -> None:
       <body name="hinge" pos="3 0 0"><joint name="hinge" type="hinge"/><geom size=".1" mass="1"/></body>
     </worldbody></mujoco>"""
     left, right = _pair(tmp_path, xml)
-    result = identity.build_model_pair_identity(left, "model.xml", right, "model.xml")
+    result = build_model_pair_identity(left, "model.xml", right, "model.xml")
     measured = {
         item.canonical_name: (
             item.joint_type,
@@ -230,7 +230,7 @@ def test_joint_rename_alias_and_target_rewrite(tmp_path: Path) -> None:
         right,
         joint_pairs=(JointAliasPair("canonical", "old", "new"),),
     )
-    result = identity.build_model_pair_identity(left, "model.xml", right, "model.xml", aliases)
+    result = build_model_pair_identity(left, "model.xml", right, "model.xml", aliases)
     assert result.alignment_summary.joint_order == ("canonical",)
     assert result.alignment.actuators[0].targets[0].name == "canonical"
     assert result.alignment.aliases_raw_sha256 is not None
@@ -246,7 +246,7 @@ def test_unnamed_duplicate_missing_extra_and_type_mismatched_joints(tmp_path: Pa
     unnamed = _hinge_model(joint_name="", actuator="")
     left, right = _pair(tmp_path / "unnamed", unnamed)
     with pytest.raises(closure.ModelAdmissionRefusal) as exc:
-        identity.build_model_pair_identity(left, "model.xml", right, "model.xml")
+        build_model_pair_identity(left, "model.xml", right, "model.xml")
     assert _refusal_reason(exc) is OperationalReasonCode.JOINT_NAME_MISSING
 
     duplicate = """<mujoco><worldbody>
@@ -255,7 +255,7 @@ def test_unnamed_duplicate_missing_extra_and_type_mismatched_joints(tmp_path: Pa
     </worldbody></mujoco>"""
     left, right = _pair(tmp_path / "duplicate", duplicate)
     with pytest.raises(closure.ModelAdmissionRefusal) as exc:
-        identity.build_model_pair_identity(left, "model.xml", right, "model.xml")
+        build_model_pair_identity(left, "model.xml", right, "model.xml")
     assert _refusal_reason(exc) is OperationalReasonCode.BASELINE_MODEL_COMPILE_ERROR
 
     left, right = _pair(
@@ -264,7 +264,7 @@ def test_unnamed_duplicate_missing_extra_and_type_mismatched_joints(tmp_path: Pa
         _hinge_model(joint_name="right", actuator_name=None, actuator=""),
     )
     with pytest.raises(closure.ModelAdmissionRefusal) as exc:
-        identity.build_model_pair_identity(left, "model.xml", right, "model.xml")
+        build_model_pair_identity(left, "model.xml", right, "model.xml")
     assert _refusal_reason(exc) is OperationalReasonCode.JOINT_IDENTITY_MISSING
 
     extra_xml = """<mujoco><worldbody>
@@ -277,7 +277,7 @@ def test_unnamed_duplicate_missing_extra_and_type_mismatched_joints(tmp_path: Pa
         extra_xml,
     )
     with pytest.raises(closure.ModelAdmissionRefusal) as exc:
-        identity.build_model_pair_identity(left, "model.xml", right, "model.xml")
+        build_model_pair_identity(left, "model.xml", right, "model.xml")
     assert _refusal_reason(exc) is OperationalReasonCode.JOINT_IDENTITY_MISSING
 
     left, right = _pair(
@@ -286,7 +286,7 @@ def test_unnamed_duplicate_missing_extra_and_type_mismatched_joints(tmp_path: Pa
         _hinge_model(joint_type="slide", actuator_name=None, actuator=""),
     )
     with pytest.raises(closure.ModelAdmissionRefusal) as exc:
-        identity.build_model_pair_identity(left, "model.xml", right, "model.xml")
+        build_model_pair_identity(left, "model.xml", right, "model.xml")
     assert _refusal_reason(exc) is OperationalReasonCode.JOINT_TYPE_MISMATCH
 
 
@@ -316,7 +316,7 @@ def test_named_actuator_reorder_rename_and_unique_unnamed_selector(tmp_path: Pat
             ),
         ),
     )
-    result = identity.build_model_pair_identity(left, "model.xml", right, "model.xml", aliases)
+    result = build_model_pair_identity(left, "model.xml", right, "model.xml", aliases)
     assert result.alignment_summary.actuator_order == ("a1", "a2")
 
     unnamed_xml = _hinge_model(actuator_name=None)
@@ -334,7 +334,7 @@ def test_named_actuator_reorder_rename_and_unique_unnamed_selector(tmp_path: Pat
         right,
         actuator_pairs=(ActuatorAliasPair("canonical", selector, selector),),
     )
-    result = identity.build_model_pair_identity(left, "model.xml", right, "model.xml", aliases)
+    result = build_model_pair_identity(left, "model.xml", right, "model.xml", aliases)
     assert result.alignment_summary.actuator_order == ("canonical",)
 
 
@@ -439,7 +439,7 @@ f 2 3 4
         encoding="ascii",
     )
     root = root.resolve()
-    result = identity.build_model_pair_identity(root, "model.xml", root, "model.xml")
+    result = build_model_pair_identity(root, "model.xml", root, "model.xml")
     assert result.baseline_closure.member_count == 3
     assert [item.path for item in result.baseline_closure.members] == [
         "model.xml",

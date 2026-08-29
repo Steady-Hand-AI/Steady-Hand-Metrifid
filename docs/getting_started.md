@@ -1,4 +1,4 @@
-# Metrifid: A Human-Friendly Cold Start Guide
+# Getting started
 
 Welcome to **Metrifid**.
 
@@ -25,22 +25,97 @@ python -c "import metrifid; print(metrifid.__version__)"
 
 ---
 
+## Choose your starting point
+
+You do not have to know which of the seven commands you need. Start from the thing that actually
+changed, and the first result will tell you where to go next.
+
+### A model or asset changed
+
+An MJCF file was edited, a mesh was regenerated, an importer was upgraded, or a pull request landed,
+and you need to know whether MuJoCo still compiles the same model.
+
+```bash
+metrifid certify old/robot.xml new/robot.xml --output out/
+```
+
+Certify compiles both source closures and compares every byte MuJoCo emits for the compiled model.
+It runs no workload and never steps the simulation.
+
+```text
+exit 0   CERTIFIED_COMPILED_EQUIVALENCE   every serialized byte matched
+exit 40  NOT_CERTIFIED_COMPILED_DIFFERS   at least one byte differed
+```
+
+Exit 40 here means the compiled artifacts differ. It does not mean the behavior is wrong, and it does
+not mean anything crashed.
+
+### The MuJoCo runtime changed
+
+You are moving to a different MuJoCo native version and need to know whether it may replace the one
+your existing evidence was built on.
+
+```bash
+metrifid run-runtime-review runtime_review_run.json
+```
+
+This creates the fixed twelve native evidence cells through two explicit, already-prepared Python
+profiles and returns the full-horizon Runtime Review decision. You prepare the two profiles yourself:
+Metrifid measures them, and does not discover, install, or repair MuJoCo environments.
+
+## Continue from the first result
+
+Whichever route you started on, the receipt names the next question. Follow the one you have:
+
+| What you want to know next | Command |
+| --- | --- |
+| the exact compiled difference, and whether your policy declares it | `review-model` |
+| the behavioral consequence under a declared workload and tolerances | `compare` |
+| workload detectability — whether your workloads would notice a perturbation at all | `qualify-workload` |
+| the largest timestep with an unbroken trustworthy prefix | `audit-timestep` |
+| whether pre-existing native evidence supports one profile replacing another | `review-runtime` |
+
+Each of these is a completed decision backed by a receipt you can revalidate independently, and none
+of them establishes physical correctness or safety.
+
+## Run the complaint-backed public cases
+
+Six small MJCF pairs, each built around a mechanism someone publicly complained about, run end to end
+through the same journey:
+
+```bash
+python examples/public_cases/run_all.py --output /absolute/absent/output
+```
+
+They are independently authored mechanism analogues, not upstream reproductions. See
+[`docs/public_cases.md`](public_cases.md) for what each one exercises and what it does not claim.
+
+---
+
 ## 1. Metrifid in one sentence
 
 **Metrifid is a local assurance tool for MuJoCo model changes.**
 
-It helps you answer three different engineering questions:
+It helps you answer six different engineering questions:
 
 1. **Did the complete compiled MuJoCo model change?**
-2. **Did behavior change on this exact declared workload?**
-3. **Which candidate timestep remains acceptable under this workload and tolerance policy?**
+2. **What changed, and was the compiled change declared by policy?**
+3. **Did behavior change on this exact declared workload?**
+4. **Which candidate timestep remains acceptable under this workload and tolerance policy?**
+5. **Would my declared workloads even notice the model changes I care about?**
+6. **Can I create the complete native-profile migration evidence and decide it in one command?**
 
-Metrifid answers those questions through three commands:
+Metrifid answers those questions through seven commands, including two paths to the same Runtime
+Review referee:
 
 ```text
 metrifid certify
+metrifid review-model
 metrifid compare
 metrifid audit-timestep
+metrifid qualify-workload
+metrifid run-runtime-review
+metrifid review-runtime
 ```
 
 A useful product description is:
@@ -68,7 +143,7 @@ trusted baseline
 → reproducible receipt
 ```
 
-The name is broader than “MuJoCo diff.” MuJoCo is the current engine and product beachhead, while the name still fits future simulation-assurance work such as runtime qualification or backend parity.
+The name is broader than “MuJoCo diff.” Metrifid covers both model assurance and runtime assurance: it certifies compiled-model identity, compares declared behavior, qualifies workloads and timesteps against explicit policies, and reviews the native runtime that produced a result.
 
 The name does **not** imply that Metrifid automatically proves physical correctness, hardware safety, or universal equivalence. Its claims are deliberately narrower and are written into every receipt.
 
@@ -81,8 +156,12 @@ Use this decision map:
 | Your question | Command | What you must provide |
 | --- | --- | --- |
 | “Did these two MJCF source trees compile to the exact same model?” | `metrifid certify` | Two MJCF entrypoints and an output directory |
+| “What compiled fields changed, and did my policy allow them?” | `metrifid review-model` | Two MJCF entrypoints, a model-release policy, and an output directory |
 | “Did the candidate behave differently on my exact replay workload?” | `metrifid compare` | A strict comparison JSON configuration, state artifact, action artifact, models, and tolerances |
 | “Which larger timestep remains acceptable for this workload?” | `metrifid audit-timestep` | One model, one frozen workload, candidate timesteps, and tolerances |
+| “Would my workloads notice these probe models, and which probes stay invisible?” | `metrifid qualify-workload` | One baseline model, probe models you supply at declared magnitudes, three to sixteen workloads, and tolerances. The parameter, direction, magnitude and `magnitude_semantics` labels are preserved user declarations, not findings. |
+| “Can I create and decide one exact native-profile migration?” | `metrifid run-runtime-review` | Two explicit already-prepared Python profile launchers and one strict self-contained manifest. |
+| “I already retained the twelve native evidence cells; can I decide them?” | `metrifid review-runtime` | One strict retained-evidence Runtime Review configuration. |
 
 A practical progression is:
 
@@ -90,10 +169,17 @@ A practical progression is:
 Start with certify.
 
 If certify reports a compiled difference:
+    use review-model to classify the change against your policy, and
     use compare when you need a workload-bounded behavioral decision.
 
 If your goal is simulation-step reduction:
     use audit-timestep.
+
+Before you trust any of the above to catch a future change:
+    use qualify-workload to find out whether your workloads can see it at all.
+
+For a native-profile migration, use run-runtime-review when Metrifid should create the fixed twelve
+cells, or review-runtime when those cells already exist.
 ```
 
 ---
@@ -134,12 +220,18 @@ The current source declares:
 
 ```text
 Python:          3.11 or newer, with no artificial upper bound
-MuJoCo engine:   native MuJoCo 3.10.0 exactly
-MuJoCo package:  stable 3.10.0 family, including binding-only 3.10.0.postN
+MuJoCo package:  stable MuJoCo >=3.9, with no minor-version ceiling
+MuJoCo identity: package base, native string, and native integer must agree
+Validated exact: 3.9.0, 3.10.0, 3.11.0, and 3.12.0
 NumPy:           1.26 or newer, with no runtime upper bound
 Operating system: Linux or macOS with the required POSIX filesystem capabilities
 Architecture:    recorded as evidence, not rejected through an architecture allowlist
 ```
+
+The newest stable MuJoCo is the primary development and release profile—3.12.0 for the frozen
+2026-08-22 snapshot. Exact 3.9.0 is the supported minimum, and retained 3.10.0 and 3.11.0 results are
+backward-compatibility evidence. A normal installation keeps the `mujoco>=3.9` resolver policy and
+therefore encounters a newer stable release automatically.
 
 Native Windows is not currently supported because Metrifid’s confined filesystem operations rely on POSIX descriptor-relative behavior. Windows users should use WSL.
 
@@ -156,7 +248,7 @@ This is the preferred way to share a controlled SDK build:
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-python -m pip install /path/to/metrifid-0.2.1-py3-none-any.whl
+python -m pip install /path/to/metrifid-<version>-py3-none-any.whl
 ```
 
 On Windows through WSL, use the normal Linux activation command inside WSL.
@@ -173,15 +265,15 @@ python -m pip install .
 
 This builds and installs the project normally. It is not an editable installation.
 
-### Option C: install from PyPI after publication
+### Option C: install a published version from PyPI
 
-Once the package is publicly published:
+For a version that is available on the index:
 
 ```bash
 python -m pip install metrifid
 ```
 
-Do not assume the PyPI project is already available merely because this command appears in the documentation. Use the wheel or source installation route until the owner completes publication.
+Check the project page on the index for the versions published there. Use the wheel or source installation route for any version that is not.
 
 ### Do not use an editable install for native decisions
 
@@ -202,8 +294,12 @@ Run:
 ```bash
 metrifid --help
 metrifid certify --help
+metrifid review-model --help
 metrifid compare --help
 metrifid audit-timestep --help
+metrifid qualify-workload --help
+metrifid review-runtime --help
+metrifid run-runtime-review --help
 ```
 
 You can also verify the import:
@@ -473,6 +569,60 @@ Detailed guide:
 
 ---
 
+## 11b. Command 4: `metrifid review-model`
+
+Use `review-model` when your question is:
+
+> What changed between these two compiled models, was each change allowed, required, forbidden or
+> undeclared by my policy, and where is the first unexpected one?
+
+### Command
+
+```bash
+metrifid review-model BASELINE_MJCF CANDIDATE_MJCF \
+  --policy MODEL_RELEASE_POLICY.json \
+  --output OUTPUT_DIRECTORY \
+  [--baseline-root BASELINE_ROOT] [--candidate-root CANDIDATE_ROOT]
+```
+
+### Run the worked example
+
+The example performs the trustworthy two-pass workflow end to end: it learns both compiled subjects
+with `certify`, runs a rule-free discovery review, converts each explained change into an exact
+`ALLOW` rule, and reviews again against that declared policy.
+
+```bash
+python examples/model_release/run_example.py --workspace /tmp/metrifid-model-release-example
+```
+
+It prints three statuses in this order:
+
+```text
+NOT_CERTIFIED_COMPILED_DIFFERS
+REVIEW_REQUIRED
+WITHIN_DECLARED_POLICY
+```
+
+The first is Certify reporting that the compiled artifacts differ. The second is the discovery pass
+refusing to bless an unbound candidate. The third is the declared review completing at exit 0.
+
+### Statuses and exit codes
+
+| Status | Exit |
+| --- | ---: |
+| `NO_COMPILED_CHANGE` | 0 |
+| `WITHIN_DECLARED_POLICY` | 0 |
+| `REVIEW_REQUIRED` | 40 |
+| `OUTSIDE_DECLARED_POLICY` | 40 |
+
+An input refusal exits `64`; an operational failure exits `70`.
+
+### What it does not prove
+
+`review-model` is static. It allocates no `mjData` and steps no model, so a
+`WITHIN_DECLARED_POLICY` result does not establish dynamic equivalence. Use `compare` for the
+workload-bounded behavioral question. See [`model_release.md`](model_release.md).
+
 ## 12. Understanding receipts
 
 Metrifid publishes canonical, self-hashed JSON documents.
@@ -530,7 +680,7 @@ Read:
 
 ---
 
-## 14. Where to find the documentation
+## Documentation map
 
 Start at the repository root.
 
@@ -538,7 +688,7 @@ Start at the repository root.
 | --- | --- |
 | [`README.md`](../README.md) | understand the product, install it, and see the main commands |
 | [`examples/certify/README.md`](../examples/certify/README.md) | run the fastest first example |
-| [`docs/sdk.md`](sdk.md) | the supported programmatic execution surface for all three operations |
+| [`docs/sdk.md`](sdk.md) | the supported programmatic execution surface for all five operations |
 | [`docs/reference.md`](reference.md) | look up commands, exits, statuses, schemas, support, and Python API |
 | [`docs/compiled_certification.md`](compiled_certification.md) | understand the exact `certify` contract |
 | [`docs/model_closure.md`](model_closure.md) | understand source identity, roots, dependencies, snapshots, and confinement |
@@ -546,6 +696,7 @@ Start at the repository root.
 | [`docs/comparison.md`](comparison.md) | configure and interpret `compare` |
 | [`docs/timestep_audit.md`](timestep_audit.md) | configure and interpret `audit-timestep` |
 | [`docs/canonicalization.md`](canonicalization.md) | understand canonical JSON, exact numbers, and self-hashes |
+| [`docs/public_cases.md`](public_cases.md) | run and interpret the six complaint-backed public cases |
 | [`docs/menagerie_formatter_case.md`](menagerie_formatter_case.md) | read a real public MuJoCo Menagerie case study |
 | [`CONTRIBUTING.md`](../CONTRIBUTING.md) | modify Metrifid or contribute code |
 | [`SECURITY.md`](../SECURITY.md) | understand security scope and report a vulnerability |
@@ -629,9 +780,14 @@ Use WSL. Native Windows does not provide the POSIX filesystem capabilities the c
 
 The package has no artificial Python upper bound. A future Python version is not rejected solely because it is newer, but it is not described as validated until that exact environment passes native evidence.
 
-### “Why is MuJoCo 3.10.0 exact?”
+### “Can I use a newer stable MuJoCo?”
 
-The compiled artifact and receipt are runtime-bound. MuJoCo releases can change compiler fields, defaults, serialization, and behavior. Metrifid currently treats MuJoCo 3.10.0 as the measured runtime profile rather than silently broadening the claim.
+Yes, when the package/native identity is coherent and the requested operation's measured
+capabilities are present. Exact 3.9.0 through 3.12.0 profiles are retained-validated. A later stable
+release is reported as capability-compatible, not validated. Runtime admission is not blanket claim
+support: `review-model` refuses an uncharacterized public-field surface, and static or dynamic
+one-actuator projections refuse a zero/multi-input or multi-output signature before publishing a
+completed result. The refusal evidence names the missing coverage and a concrete remediation.
 
 ### “Why did Metrifid refuse an editable install?”
 

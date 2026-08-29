@@ -1,18 +1,69 @@
 name: ci
 
-# Build one wheel once. Every blocking compatibility lane installs those exact bytes noneditably.
+# Build one wheel and one sdist once, then spend compute only where a lane proves something no
+# other lane proves.
+#
+# Two complete installed-wheel suites run by default, and they are causally different: the
+# resolver-latest supported runtime, and the declared dependency floor. Every other default lane is
+# a boundary smoke that installs those same original bytes and exercises the installed surface plus
+# a focused semantic list. Repeating the whole suite on a fourth interpreter re-runs the same
+# assertions against the same code and buys no new information.
+#
+# The broad interpreter/OS matrix still exists as opt-in diagnostics. It is nonblocking, excluded
+# from the default summary, and never substitutes for a required lane.
+#
 # MJB digests are lane-local evidence and are never compared across runtimes.
 
 on:
   push:
     branches: [main]
   pull_request:
+    # Exactly the three activity types that mean "there is new code to judge". A label-driven
+    # activity type was deliberately removed: every ordinary job skipped on it, and GitHub reports
+    # a skipped required job to branch protection as a successful status, so tagging a pull request
+    # could have satisfied the required summary without any lane having run.
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+    inputs:
+      expanded_full_matrix:
+        description: Run the nonblocking expanded compatibility diagnostics
+        type: boolean
+        default: false
 
 permissions:
   contents: read
 
+defaults:
+  run:
+    # Fail fast and fail on any stage of a pipeline. A lane that pipes test output must not pass
+    # because `tee` succeeded.
+    shell: bash
+
 env:
-  WHEEL_ARTIFACT: metrifid-distributions
+  ORIGINAL_ARTIFACT: metrifid-original-distributions
+  # One authority for the focused semantic list every boundary smoke and retained lane runs. These
+  # are the suites that actually change behaviour when the interpreter, operating system,
+  # architecture or MuJoCo build changes.
+  FOCUSED_SEMANTIC_TESTS: >-
+    tests/unit/runtime_compatibility
+    tests/contract/runtime_compatibility
+    tests/integration/runtime_compatibility
+    tests/unit/test_operational_registry.py
+    tests/unit/test_compare_environment.py
+    tests/contract/test_certify_admission.py
+    tests/contract/test_model_identity_contract.py
+    tests/contract/model_release/test_receipt.py
+    tests/contract/test_public_api.py
+    tests/integration/test_installed_distribution.py
+  # The direct-sdist lane proves the packaged source tree installs and exposes the same public
+  # surface. It does not need the complete suite to prove that.
+  SDIST_FOCUSED_TESTS: >-
+    tests/contract/test_public_api.py
+    tests/contract/test_runtime_review_public_surface.py
+    tests/integration/test_installed_distribution.py
+    tests/integration/test_examples.py
+    tests/integration/test_sdk_examples.py
+    tests/integration/test_operation_labels_and_config_admission.py
 
 jobs:
   build_and_quality:
@@ -20,17 +71,107 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          # No credential is needed after checkout, and the identity receipt below must not be
+          # producible by anything that inherited a token from this step.
+          persist-credentials: false
 
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: "3.11"
 
+      - name: Record the exact review subject
+        # On a pull request GitHub checks out a synthetic merge commit, not the head a reviewer
+        # reads. Recording only that checkout leaves a later admission unable to say which head it
+        # admitted, so the head is fetched by its own ref and its tree derived from that object.
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_SHA: ${{ github.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          mkdir -p quality-evidence
+          checkout_sha="$(git rev-parse HEAD)"
+          checkout_tree="$(git rev-parse 'HEAD^{tree}')"
+          # The checkout must be the subject GitHub said it dispatched.
+          test "$checkout_sha" = "$EVENT_SHA"
+          head_sha=""
+          head_tree=""
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            git fetch --no-tags --depth=1 origin "refs/pull/${PR_NUMBER}/head"
+            head_sha="$(git rev-parse FETCH_HEAD)"
+            # Trust the event payload, then prove the fetched object is that exact commit.
+            test "$head_sha" = "$PR_HEAD_SHA"
+            head_tree="$(git rev-parse 'FETCH_HEAD^{tree}')"
+          fi
+          CHECKOUT_SHA="$checkout_sha" CHECKOUT_TREE="$checkout_tree" \
+          HEAD_SHA="$head_sha" HEAD_TREE="$head_tree" python - <<'PY'
+          import json
+          import os
+          import pathlib
+
+          is_pull_request = os.environ["EVENT_NAME"] == "pull_request"
+          receipt = {
+              "schema_version": 1,
+              "event_name": os.environ["EVENT_NAME"],
+              "event_sha": os.environ["EVENT_SHA"],
+              "checkout_sha": os.environ["CHECKOUT_SHA"],
+              "checkout_tree": os.environ["CHECKOUT_TREE"],
+              "pull_request_head_sha": os.environ["HEAD_SHA"] if is_pull_request else None,
+              "pull_request_head_tree": os.environ["HEAD_TREE"] if is_pull_request else None,
+          }
+          pathlib.Path("quality-evidence/checkout_identity.json").write_text(
+              json.dumps(receipt, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+          )
+          print(json.dumps(receipt, indent=2, sort_keys=True))
+          PY
+
       - name: Install the deterministic build and quality toolchain
         run: |
           python -m pip install -c .github/quality-constraints.txt \
-            build editables hatchling hypothesis mypy numpy pytest pytest-randomly ruff twine \
-            "mujoco==3.10.0.*"
+            build editables hatchling hypothesis mypy numpy pytest pytest-check \
+            pytest-randomly pytest-xdist ruff twine \
+            mujoco
           python -m pip install --no-build-isolation --no-deps --editable .
+
+      - name: Record the exact latest quality runtime identity
+        run: |
+          python -m pip check
+          python - <<'PY'
+          import json
+          import pathlib
+          import platform
+          import sys
+
+          import mujoco
+
+          import numpy
+
+          from metrifid._mujoco_runtime import admit_mujoco_runtime
+
+          admission = admit_mujoco_runtime()
+          assert admission.support_tier.value == "ADMITTED_CAPABILITY_COMPATIBLE_PROFILE"
+          identity = {
+              "package_version": mujoco.__version__,
+              "package_base_version": admission.package_base_version,
+              "native_version_string": mujoco.mj_versionString(),
+              "native_version_integer": mujoco.mj_version(),
+              "platform_machine": platform.machine(),
+              "platform_system": platform.system(),
+              "numpy_version": numpy.__version__,
+              "python_version": sys.version,
+              "python_major_minor": f"{sys.version_info.major}.{sys.version_info.minor}",
+              "support_tier": admission.support_tier.value,
+          }
+          pathlib.Path("quality-evidence/runtime_identity.json").write_text(
+              json.dumps(identity, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          print(json.dumps(identity, sort_keys=True))
+          PY
+
+      - name: Record the resolved quality toolchain
+        run: python -m pip freeze > quality-evidence/pip_freeze.txt
 
       - name: Ruff check
         run: python -m ruff check .
@@ -39,80 +180,93 @@ jobs:
         run: python -m ruff format --check .
 
       - name: MyPy strict
-        run: python -m mypy --strict src/metrifid
+        run: python -m mypy --strict src/metrifid .github/scripts/validate_ci_evidence.py
 
-      - name: Build one direct wheel and one direct sdist through isolated PEP 517
+      - name: Build one original wheel and one original sdist through isolated PEP 517
         run: python -m build
 
       - name: Twine check
-        run: python -m twine check dist/*
+        run: python -m twine check --strict dist/*
 
-      - name: Record the wheel identity
+      - name: Record the original artifact manifest
         run: |
           python - <<'PY'
           import hashlib
+          import json
           import pathlib
 
           wheels = sorted(pathlib.Path("dist").glob("*.whl"))
           sdists = sorted(pathlib.Path("dist").glob("*.tar.gz"))
           assert len(wheels) == 1 and len(sdists) == 1, (wheels, sdists)
-          digest = hashlib.sha256(wheels[0].read_bytes()).hexdigest()
-          pathlib.Path("wheel.sha256").write_text(digest + "\n", encoding="utf-8")
-          print("wheel", wheels[0].name, digest)
+
+
+          def entry(path: pathlib.Path) -> dict[str, object]:
+              data = path.read_bytes()
+              return {
+                  "filename": path.name,
+                  "size_bytes": len(data),
+                  "sha256": hashlib.sha256(data).hexdigest(),
+              }
+
+
+          manifest = {"wheel": entry(wheels[0]), "sdist": entry(sdists[0])}
+          pathlib.Path("original_manifest.json").write_text(
+              json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+          )
+          print(json.dumps(manifest, indent=2, sort_keys=True))
           PY
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
-          name: ${{ env.WHEEL_ARTIFACT }}
+          name: ${{ env.ORIGINAL_ARTIFACT }}
           path: |
             dist/
-            wheel.sha256
+            original_manifest.json
+            quality-evidence/
           if-no-files-found: error
 
   matrix_lane:
-    name: ${{ matrix.id }}
+    name: ${{ matrix.id }} (${{ matrix.tier }})
     needs: build_and_quality
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - id: linux_x64_py311
-            runner: ubuntu-24.04
-            python: "3.11"
-          - id: linux_x64_py312
+          # The one default complete suite on the resolver-latest supported runtime.
+          - id: linux_x64_py312_full
             runner: ubuntu-24.04
             python: "3.12"
+            tier: full
+            expect_machine: x86_64
+            intel_mujoco_pin: "false"
+          # Newer interpreters: the boundary each proves is "this CPython still works", which the
+          # installed surface and the focused semantic list answer.
           - id: linux_x64_py313
             runner: ubuntu-24.04
             python: "3.13"
+            tier: smoke
+            expect_machine: x86_64
+            intel_mujoco_pin: "false"
           - id: linux_x64_py314
             runner: ubuntu-24.04
             python: "3.14"
-          - id: macos_arm64_py311
-            runner: macos-15
-            python: "3.11"
-          - id: macos_arm64_py312
-            runner: macos-15
-            python: "3.12"
-          - id: macos_arm64_py313
-            runner: macos-15
-            python: "3.13"
+            tier: smoke
+            expect_machine: x86_64
+            intel_mujoco_pin: "false"
+          # A different operating system and a different architecture are the boundaries here.
           - id: macos_arm64_py314
             runner: macos-15
             python: "3.14"
-          - id: macos_x64_py311
-            runner: macos-15-intel
-            python: "3.11"
+            tier: smoke
+            expect_machine: arm64
+            intel_mujoco_pin: "false"
           - id: macos_x64_py312
             runner: macos-15-intel
             python: "3.12"
-          - id: macos_x64_py313
-            runner: macos-15-intel
-            python: "3.13"
-          - id: macos_x64_py314
-            runner: macos-15-intel
-            python: "3.14"
+            tier: smoke
+            expect_machine: x86_64
+            intel_mujoco_pin: "true"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
@@ -122,37 +276,105 @@ jobs:
 
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
-          name: ${{ env.WHEEL_ARTIFACT }}
+          name: ${{ env.ORIGINAL_ARTIFACT }}
           path: release-artifacts
 
-      - name: Verify and install the exact built wheel with the normal resolver
+      - name: Constrain MuJoCo to a published binary on macOS Intel only
+        if: matrix.intel_mujoco_pin == 'true'
+        run: |
+          # Host policy for one runner, kept out of project metadata and out of the shared
+          # constraints file so it can never leak into a published dependency claim.
+          printf 'mujoco==3.10.0\n' > "$RUNNER_TEMP/intel-constraint.txt"
+          echo "PIP_CONSTRAINT=$RUNNER_TEMP/intel-constraint.txt" >> "$GITHUB_ENV"
+          echo "PIP_ONLY_BINARY=mujoco" >> "$GITHUB_ENV"
+
+      - name: Verify and install the exact original wheel
         run: |
           python - <<'PY'
           import hashlib
+          import json
           import pathlib
 
+          manifest = json.loads(
+              pathlib.Path("release-artifacts/original_manifest.json").read_text(encoding="utf-8")
+          )
           wheels = sorted(pathlib.Path("release-artifacts/dist").glob("*.whl"))
           assert len(wheels) == 1, wheels
-          expected = pathlib.Path("release-artifacts/wheel.sha256").read_text(encoding="utf-8").strip()
-          actual = hashlib.sha256(wheels[0].read_bytes()).hexdigest()
-          assert actual == expected, (actual, expected)
+          assert wheels[0].name == manifest["wheel"]["filename"], wheels[0].name
+          digest = hashlib.sha256(wheels[0].read_bytes()).hexdigest()
+          assert digest == manifest["wheel"]["sha256"], (digest, manifest["wheel"])
+          pathlib.Path("lane-evidence").mkdir(exist_ok=True)
+          pathlib.Path("lane-evidence/installed_artifact.json").write_text(
+              json.dumps({"kind": "wheel", "sha256": digest}, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
           PY
           python -m pip install "$(ls release-artifacts/dist/*.whl)"
           python -m pip install -c .github/quality-constraints.txt \
-            editables hatchling hypothesis mypy pytest pytest-randomly
+            editables hatchling hypothesis mypy pytest pytest-check pytest-randomly pytest-xdist
 
-      - name: Lane runtime identity
-        run: python -m pip check
+      - name: Record the exact resolved runtime identity and support tier
+        env:
+          EXPECT_MACHINE: ${{ matrix.expect_machine }}
+          INTEL_MUJOCO_PIN: ${{ matrix.intel_mujoco_pin }}
+        run: |
+          python -m pip check
+          python - <<'PY'
+          import json
+          import os
+          import pathlib
+          import platform
+          import sys
 
-      - name: Create lane evidence directory
-        run: mkdir -p lane-evidence
+          import metrifid
+          import mujoco
+          import numpy
 
-      - name: Installed-wheel test suite
-        run: python -m pytest -q --junitxml=lane-evidence/full.xml tests
+          from metrifid._mujoco_runtime import admit_mujoco_runtime
 
-      - name: Fixed randomized installed-wheel suite
-        if: matrix.id == 'linux_x64_py312'
-        run: python -m pytest -q --randomly-seed=17 --junitxml=lane-evidence/randomized.xml tests
+          # The runner label is a promise about hardware; this is the measurement.
+          machine = platform.machine()
+          assert machine == os.environ["EXPECT_MACHINE"], (machine, os.environ["EXPECT_MACHINE"])
+          if os.environ["INTEL_MUJOCO_PIN"] == "true":
+              assert mujoco.__version__ == "3.10.0", mujoco.__version__
+          assert "site-packages" in metrifid.__file__, metrifid.__file__
+          admission = admit_mujoco_runtime()
+          assert admission.support_tier.value == "ADMITTED_CAPABILITY_COMPATIBLE_PROFILE"
+          identity = {
+              "package_version": mujoco.__version__,
+              "package_base_version": admission.package_base_version,
+              "native_version_string": mujoco.mj_versionString(),
+              "native_version_integer": mujoco.mj_version(),
+              "platform_machine": machine,
+              "platform_system": platform.system(),
+              "numpy_version": numpy.__version__,
+              "python_version": sys.version,
+              "python_major_minor": f"{sys.version_info.major}.{sys.version_info.minor}",
+              "support_tier": admission.support_tier.value,
+          }
+          pathlib.Path("lane-evidence/runtime_identity.json").write_text(
+              json.dumps(identity, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          print(json.dumps(identity, sort_keys=True))
+          PY
+
+      - name: Provision the constrained build frontend
+        if: matrix.tier == 'full'
+        run: |
+          python -m pip install -c .github/quality-constraints.txt build
+
+      - name: Complete installed-wheel test suite
+        if: matrix.tier == 'full'
+        run: >-
+          python -m pytest -q -n auto --dist loadfile --randomly-seed=17
+          --junitxml=lane-evidence/full.xml tests
+
+      - name: Focused semantic suites for this boundary
+        if: matrix.tier == 'smoke'
+        run: >-
+          python -m pytest -q -n auto --dist loadfile --randomly-seed=17
+          --junitxml=lane-evidence/focused.xml ${{ env.FOCUSED_SEMANTIC_TESTS }}
 
       - name: Bundled first-use example
         run: |
@@ -160,17 +382,18 @@ jobs:
           cat lane-evidence/example.log
 
       - name: Gymnasium workload helper end-to-end
+        if: matrix.id == 'linux_x64_py312_full'
         run: |
-          python -m pip install gymnasium
-          mkdir -p lane-evidence/workload
-          python examples/workload/record_gymnasium_workload.py --env HalfCheetah-v5 --output lane-evidence/workload --steps 5
+          # Kept once, on the primary lane. The helper exercises a third-party recording path that
+          # does not vary by interpreter or operating system.
+          python -m pip install "gymnasium[mujoco]"
+          python examples/workload/record_gymnasium_workload.py \
+            --env HalfCheetah-v5 --output lane-evidence/workload --steps 5
           python - <<'PY'
           import numpy as np
-          from pathlib import Path
-          
+
           state = np.load("lane-evidence/workload/state.npz")
           actions = np.load("lane-evidence/workload/actions.npz")
-          
           assert "qpos_offsets" in state
           assert "qvel_offsets" in state
           assert "actuator_names" in actions
@@ -180,12 +403,15 @@ jobs:
 
       - name: CLI help smoke
         run: |
-          {
-            metrifid --help
-            metrifid certify --help
-            metrifid compare --help
-            metrifid audit-timestep --help
-          } > lane-evidence/cli_help.log
+          : > lane-evidence/cli_help.log
+          # One marker per invocation. The top-level help already lists every subcommand
+          # name, so a bare name search would pass without the command ever running.
+          for command in certify review-model compare audit-timestep \
+                         qualify-workload review-runtime run-runtime-review; do
+            printf '### metrifid %s --help\n' "$command" >> lane-evidence/cli_help.log
+            metrifid "$command" --help >> lane-evidence/cli_help.log
+          done
+          metrifid --help >> lane-evidence/cli_help.log
           cat lane-evidence/cli_help.log
 
       - name: Wheel-only demo from an empty directory
@@ -203,14 +429,6 @@ jobs:
             python "$script"
           done | tee "$GITHUB_WORKSPACE/lane-evidence/sdk_examples.log"
 
-      - name: Source-checkout comparison example
-        run: |
-          rm -rf "$RUNNER_TEMP/compare-copy" && mkdir -p "$RUNNER_TEMP/compare-copy"
-          cp -R examples/compare/. "$RUNNER_TEMP/compare-copy/"
-          cd "$RUNNER_TEMP/compare-copy"
-          python prepare_workload.py
-          metrifid compare comparison.json | tee "$GITHUB_WORKSPACE/lane-evidence/compare_example.log"
-
       - name: MJB characterization (29 checks, lane-local)
         run: |
           python tools/mjb_characterization.py > lane-evidence/mjb.log
@@ -218,8 +436,9 @@ jobs:
 
       - name: Record blocking lane evidence
         run: |
-          cp release-artifacts/wheel.sha256 lane-evidence/wheel.sha256
+          cp release-artifacts/original_manifest.json lane-evidence/original_manifest.json
           printf '%s\n' '${{ matrix.id }}' > lane-evidence/lane_id.txt
+          printf '%s\n' '${{ matrix.tier }}' > lane-evidence/tier.txt
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
@@ -228,7 +447,10 @@ jobs:
           if-no-files-found: error
 
   minimum_dependency_lane:
-    name: linux_x64_py311_numpy_min
+    name: linux_x64_py311_numpy_min (full)
+    # The second complete suite. It is causally different from the primary lane: it proves the
+    # declared dependency floor still satisfies every assertion, which the resolver-latest lane
+    # cannot observe.
     needs: build_and_quality
     runs-on: ubuntu-24.04
     steps:
@@ -240,34 +462,81 @@ jobs:
 
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
-          name: ${{ env.WHEEL_ARTIFACT }}
+          name: ${{ env.ORIGINAL_ARTIFACT }}
           path: release-artifacts
 
-      - name: Verify and install the declared minimum dependency profile
+      - name: Verify the original wheel and install the declared minimum profile
         run: |
           python - <<'PY'
           import hashlib
+          import json
           import pathlib
 
+          manifest = json.loads(
+              pathlib.Path("release-artifacts/original_manifest.json").read_text(encoding="utf-8")
+          )
           wheels = sorted(pathlib.Path("release-artifacts/dist").glob("*.whl"))
           assert len(wheels) == 1, wheels
-          expected = pathlib.Path("release-artifacts/wheel.sha256").read_text(encoding="utf-8").strip()
-          actual = hashlib.sha256(wheels[0].read_bytes()).hexdigest()
-          assert actual == expected, (actual, expected)
+          assert wheels[0].name == manifest["wheel"]["filename"], wheels[0].name
+          digest = hashlib.sha256(wheels[0].read_bytes()).hexdigest()
+          assert digest == manifest["wheel"]["sha256"], (digest, manifest["wheel"])
+          pathlib.Path("lane-evidence").mkdir(exist_ok=True)
+          pathlib.Path("lane-evidence/installed_artifact.json").write_text(
+              json.dumps({"kind": "wheel", "sha256": digest}, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
           PY
-          python -m pip install "numpy==1.26.4" "mujoco==3.10.0.*"
+          # The floor is installed first, then the wheel with --no-deps, so the resolver cannot
+          # quietly upgrade past the minimum this lane exists to prove.
+          python -m pip install "numpy==1.26.4" "mujoco==3.9.0"
           python -m pip install --no-deps "$(ls release-artifacts/dist/*.whl)"
           python -m pip install -c .github/quality-constraints.txt \
-            editables hatchling hypothesis mypy pytest pytest-randomly
+            build editables hatchling hypothesis mypy pytest pytest-check \
+            pytest-randomly pytest-xdist
 
-      - name: Lane runtime identity
-        run: python -m pip check
+      - name: Record the exact minimum runtime identity and support tier
+        run: |
+          python -m pip check
+          python - <<'PY'
+          import json
+          import pathlib
+          import platform
+          import sys
 
-      - name: Create lane evidence directory
-        run: mkdir -p lane-evidence
+          import metrifid
+          import mujoco
+          import numpy
 
-      - name: Installed-wheel test suite
-        run: python -m pytest -q --junitxml=lane-evidence/full.xml tests
+          from metrifid._mujoco_runtime import admit_mujoco_runtime
+
+          assert mujoco.__version__ == "3.9.0", mujoco.__version__
+          assert numpy.__version__ == "1.26.4", numpy.__version__
+          assert "site-packages" in metrifid.__file__, metrifid.__file__
+          admission = admit_mujoco_runtime()
+          assert admission.support_tier.value == "ADMITTED_CAPABILITY_COMPATIBLE_PROFILE"
+          identity = {
+              "package_version": mujoco.__version__,
+              "package_base_version": admission.package_base_version,
+              "native_version_string": mujoco.mj_versionString(),
+              "native_version_integer": mujoco.mj_version(),
+              "numpy_version": numpy.__version__,
+              "platform_machine": platform.machine(),
+              "platform_system": platform.system(),
+              "python_version": sys.version,
+              "python_major_minor": f"{sys.version_info.major}.{sys.version_info.minor}",
+              "support_tier": admission.support_tier.value,
+          }
+          pathlib.Path("lane-evidence/runtime_identity.json").write_text(
+              json.dumps(identity, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          print(json.dumps(identity, sort_keys=True))
+          PY
+
+      - name: Complete installed-wheel test suite
+        run: >-
+          python -m pytest -q -n auto --dist loadfile --randomly-seed=17
+          --junitxml=lane-evidence/full.xml tests
 
       - name: Bundled first-use example
         run: |
@@ -276,12 +545,15 @@ jobs:
 
       - name: CLI help smoke
         run: |
-          {
-            metrifid --help
-            metrifid certify --help
-            metrifid compare --help
-            metrifid audit-timestep --help
-          } > lane-evidence/cli_help.log
+          : > lane-evidence/cli_help.log
+          # One marker per invocation. The top-level help already lists every subcommand
+          # name, so a bare name search would pass without the command ever running.
+          for command in certify review-model compare audit-timestep \
+                         qualify-workload review-runtime run-runtime-review; do
+            printf '### metrifid %s --help\n' "$command" >> lane-evidence/cli_help.log
+            metrifid "$command" --help >> lane-evidence/cli_help.log
+          done
+          metrifid --help >> lane-evidence/cli_help.log
           cat lane-evidence/cli_help.log
 
       - name: Wheel-only demo from an empty directory
@@ -299,14 +571,6 @@ jobs:
             python "$script"
           done | tee "$GITHUB_WORKSPACE/lane-evidence/sdk_examples.log"
 
-      - name: Source-checkout comparison example
-        run: |
-          rm -rf "$RUNNER_TEMP/compare-copy" && mkdir -p "$RUNNER_TEMP/compare-copy"
-          cp -R examples/compare/. "$RUNNER_TEMP/compare-copy/"
-          cd "$RUNNER_TEMP/compare-copy"
-          python prepare_workload.py
-          metrifid compare comparison.json | tee "$GITHUB_WORKSPACE/lane-evidence/compare_example.log"
-
       - name: MJB characterization (29 checks, lane-local)
         run: |
           python tools/mjb_characterization.py > lane-evidence/mjb.log
@@ -314,8 +578,9 @@ jobs:
 
       - name: Record blocking lane evidence
         run: |
-          cp release-artifacts/wheel.sha256 lane-evidence/wheel.sha256
+          cp release-artifacts/original_manifest.json lane-evidence/original_manifest.json
           printf '%s\n' 'linux_x64_py311_numpy_min' > lane-evidence/lane_id.txt
+          printf '%s\n' 'full' > lane-evidence/tier.txt
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
@@ -323,8 +588,137 @@ jobs:
           path: lane-evidence/
           if-no-files-found: error
 
+  retained_compatibility_lane:
+    name: retained compatibility (${{ matrix.role }})
+    # Exact older MuJoCo profiles the product still claims. They run the focused semantic list, not
+    # the complete suite: what changes with the runtime is admission and native behaviour.
+    needs: build_and_quality
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - role: prior_validated
+            mujoco: "3.10.0"
+          - role: current_validated
+            mujoco: "3.11.0"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.12"
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: ${{ env.ORIGINAL_ARTIFACT }}
+          path: release-artifacts
+
+      - name: Verify the original wheel and install the retained compatibility profile
+        run: |
+          python - <<'PY'
+          import hashlib
+          import json
+          import pathlib
+
+          manifest = json.loads(
+              pathlib.Path("release-artifacts/original_manifest.json").read_text(encoding="utf-8")
+          )
+          wheels = sorted(pathlib.Path("release-artifacts/dist").glob("*.whl"))
+          assert len(wheels) == 1, wheels
+          digest = hashlib.sha256(wheels[0].read_bytes()).hexdigest()
+          assert digest == manifest["wheel"]["sha256"], (digest, manifest["wheel"])
+          pathlib.Path("retained-evidence").mkdir(exist_ok=True)
+          pathlib.Path("retained-evidence/installed_artifact.json").write_text(
+              json.dumps({"kind": "wheel", "sha256": digest}, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          PY
+          python -m pip install "mujoco==${{ matrix.mujoco }}"
+          python -m pip install --no-deps "$(ls release-artifacts/dist/*.whl)"
+          python -m pip install -c .github/quality-constraints.txt \
+            editables hatchling hypothesis mypy pytest pytest-check pytest-randomly pytest-xdist
+
+      - name: Record live admission and validate the retained exact tuple
+        env:
+          EXPECTED_MUJOCO: ${{ matrix.mujoco }}
+        run: |
+          python -m pip check
+          python - <<'PY'
+          import json
+          import os
+          import pathlib
+          import platform
+          import sys
+
+          import mujoco
+
+          import numpy
+
+          from metrifid._mujoco_runtime import admit_mujoco_runtime
+
+          expected = os.environ["EXPECTED_MUJOCO"]
+          admission = admit_mujoco_runtime()
+          assert mujoco.__version__ == expected
+          assert admission.native_version_string == expected
+          assert admission.support_tier.value == "ADMITTED_CAPABILITY_COMPATIBLE_PROFILE"
+          identity = {
+              "package_version": mujoco.__version__,
+              "package_base_version": admission.package_base_version,
+              "native_version_string": mujoco.mj_versionString(),
+              "native_version_integer": mujoco.mj_version(),
+              "platform_machine": platform.machine(),
+              "platform_system": platform.system(),
+              "numpy_version": numpy.__version__,
+              "python_version": sys.version,
+              "python_major_minor": f"{sys.version_info.major}.{sys.version_info.minor}",
+              "support_tier": admission.support_tier.value,
+          }
+          pathlib.Path("retained-evidence/runtime_identity.json").write_text(
+              json.dumps(identity, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          print(json.dumps(identity, sort_keys=True))
+          PY
+          python tools/validate_mujoco_compatibility.py \
+            --profile-role "${{ matrix.role }}" \
+            --expected-mujoco-version "${{ matrix.mujoco }}" \
+            --output retained-evidence/compatibility
+
+      - name: Directly affected retained-runtime tests
+        run: >-
+          python -m pytest -q -n auto --dist loadfile --randomly-seed=17
+          --junitxml=retained-evidence/focused.xml ${{ env.FOCUSED_SEMANTIC_TESTS }}
+
+      - name: All retained-profile command help surfaces
+        run: |
+          : > retained-evidence/cli_help.log
+          # One marker per invocation. The top-level help already lists every subcommand
+          # name, so a bare name search would pass without the command ever running.
+          for command in certify review-model compare audit-timestep \
+                         qualify-workload review-runtime run-runtime-review; do
+            printf '### metrifid %s --help\n' "$command" >> retained-evidence/cli_help.log
+            metrifid "$command" --help >> retained-evidence/cli_help.log
+          done
+          metrifid --help >> retained-evidence/cli_help.log
+          cat retained-evidence/cli_help.log
+
+      - name: Record retained evidence identity
+        run: |
+          cp release-artifacts/original_manifest.json retained-evidence/original_manifest.json
+          printf '%s\n' '${{ matrix.role }}' > retained-evidence/profile_role.txt
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: retained-${{ matrix.role }}
+          path: retained-evidence/
+          if-no-files-found: error
+
   sdist_install_lane:
     name: direct sdist installation
+    # Proves the packaged source tree installs and exposes the same public surface. It does not
+    # re-run the complete suite: the wheel lanes already own that, and this lane's distinct risk is
+    # packaging, not behaviour.
     needs: build_and_quality
     runs-on: ubuntu-24.04
     steps:
@@ -336,34 +730,104 @@ jobs:
 
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
-          name: ${{ env.WHEEL_ARTIFACT }}
+          name: ${{ env.ORIGINAL_ARTIFACT }}
           path: release-artifacts
 
-      - name: Install the direct sdist into a clean environment
+      - name: Verify and install the exact original sdist
         run: |
+          mkdir -p sdist-evidence
+          python - <<'PY'
+          import hashlib
+          import json
+          import pathlib
+
+          manifest = json.loads(
+              pathlib.Path("release-artifacts/original_manifest.json").read_text(encoding="utf-8")
+          )
+          sdists = sorted(pathlib.Path("release-artifacts/dist").glob("*.tar.gz"))
+          assert len(sdists) == 1, sdists
+          assert sdists[0].name == manifest["sdist"]["filename"], sdists[0].name
+          digest = hashlib.sha256(sdists[0].read_bytes()).hexdigest()
+          assert digest == manifest["sdist"]["sha256"], (digest, manifest["sdist"])
+          pathlib.Path("sdist-evidence/installed_artifact.json").write_text(
+              json.dumps({"kind": "sdist", "sha256": digest}, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          PY
           python -m pip install -c .github/quality-constraints.txt \
-            editables hatchling hypothesis mypy pytest pytest-randomly numpy "mujoco==3.10.0.*"
+            editables hatchling hypothesis mypy pytest pytest-check pytest-randomly pytest-xdist \
+            numpy mujoco
           python -m pip install "$(ls release-artifacts/dist/*.tar.gz)"
 
       - name: Environment identity
         run: |
-          mkdir -p sdist-evidence
           python -m pip check
-          python -c "import metrifid, sys; print(metrifid.__version__, sys.version)"
+          python - <<'PY'
+          import json
+          import pathlib
+          import platform
+          import sys
 
-      - name: Complete suite against the sdist installation
-        run: python -m pytest -q --junitxml=sdist-evidence/sdist_install_full.xml tests
+          import metrifid
+          import mujoco
+          import numpy
+
+          from metrifid._mujoco_runtime import admit_mujoco_runtime
+
+          assert "site-packages" in metrifid.__file__, metrifid.__file__
+          admission = admit_mujoco_runtime()
+          assert admission.support_tier.value == "ADMITTED_CAPABILITY_COMPATIBLE_PROFILE"
+          identity = {
+              "metrifid_version": metrifid.__version__,
+              "package_version": mujoco.__version__,
+              "package_base_version": admission.package_base_version,
+              "native_version_string": mujoco.mj_versionString(),
+              "native_version_integer": mujoco.mj_version(),
+              "platform_machine": platform.machine(),
+              "platform_system": platform.system(),
+              "numpy_version": numpy.__version__,
+              "python_version": sys.version,
+              "python_major_minor": f"{sys.version_info.major}.{sys.version_info.minor}",
+              "support_tier": admission.support_tier.value,
+          }
+          pathlib.Path("sdist-evidence/runtime_identity.json").write_text(
+              json.dumps(identity, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          print(json.dumps(identity, sort_keys=True))
+          PY
+
+      - name: Focused public-surface suites against the sdist installation
+        run: >-
+          python -m pytest -q -n auto --dist loadfile --randomly-seed=17
+          --junitxml=sdist-evidence/focused.xml ${{ env.SDIST_FOCUSED_TESTS }}
+
+      - name: All installed command help surfaces
+        run: |
+          : > sdist-evidence/cli_help.log
+          # One marker per invocation. The top-level help already lists every subcommand
+          # name, so a bare name search would pass without the command ever running.
+          for command in certify review-model compare audit-timestep \
+                         qualify-workload review-runtime run-runtime-review; do
+            printf '### metrifid %s --help\n' "$command" >> sdist-evidence/cli_help.log
+            metrifid "$command" --help >> sdist-evidence/cli_help.log
+          done
+          metrifid --help >> sdist-evidence/cli_help.log
+          cat sdist-evidence/cli_help.log
 
       - name: MJB characterization in the sdist environment
         run: |
           python tools/mjb_characterization.py > sdist-evidence/mjb_sdist.log
           cat sdist-evidence/mjb_sdist.log
 
-      - name: Wheel-only demo and SDK examples from the sdist installation
+      - name: Wheel-only demo from the sdist installation
         run: |
           mkdir -p "$RUNNER_TEMP/sdist-demo"
           cd "$RUNNER_TEMP/sdist-demo"
           python -m metrifid.demo | tee "$GITHUB_WORKSPACE/sdist-evidence/demo.log"
+
+      - name: Record sdist lane evidence
+        run: cp release-artifacts/original_manifest.json sdist-evidence/original_manifest.json
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
@@ -373,6 +837,8 @@ jobs:
 
   distribution_equivalence:
     name: direct wheel versus wheel rebuilt from sdist
+    # The rebuilt wheel is parity evidence with its own name and digest. It is never installed by a
+    # release lane and never stands in for the original publication candidate.
     needs: build_and_quality
     runs-on: ubuntu-24.04
     steps:
@@ -384,56 +850,74 @@ jobs:
 
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
-          name: ${{ env.WHEEL_ARTIFACT }}
+          name: ${{ env.ORIGINAL_ARTIFACT }}
           path: release-artifacts
 
-      - name: Rebuild a wheel from the extracted sdist through isolated PEP 517
+      - name: Rebuild a parity wheel from the extracted sdist through isolated PEP 517
         run: |
           python -m pip install -c .github/quality-constraints.txt build
           mkdir -p equivalence/extracted
           tar -xzf "$(ls release-artifacts/dist/*.tar.gz)" -C equivalence/extracted
-          python -m build --wheel --outdir equivalence/from_sdist \
+          python -m build --wheel --outdir equivalence/parity_from_sdist \
             "$(ls -d equivalence/extracted/*/)"
 
       - name: Compare the two wheels semantically
         run: |
           python - <<'PY'
-          import json, pathlib, zipfile
+          import hashlib
+          import json
+          import pathlib
+          import zipfile
           from email.parser import BytesParser
 
-          direct = sorted(pathlib.Path("release-artifacts/dist").glob("*.whl"))[0]
-          rebuilt = sorted(pathlib.Path("equivalence/from_sdist").glob("*.whl"))[0]
+          manifest = json.loads(
+              pathlib.Path("release-artifacts/original_manifest.json").read_text(encoding="utf-8")
+          )
+          original = sorted(pathlib.Path("release-artifacts/dist").glob("*.whl"))[0]
+          parity = sorted(pathlib.Path("equivalence/parity_from_sdist").glob("*.whl"))[0]
+          original_digest = hashlib.sha256(original.read_bytes()).hexdigest()
+          assert original_digest == manifest["wheel"]["sha256"], original_digest
+
 
           def package(path):
               with zipfile.ZipFile(path) as archive:
-                  return {n: archive.read(n) for n in archive.namelist()
-                          if n.startswith("metrifid/")}
+                  return {
+                      n: archive.read(n) for n in archive.namelist() if n.startswith("metrifid/")
+                  }
+
 
           def dist_info(path, suffix):
               with zipfile.ZipFile(path) as archive:
-                  name = next(n for n in archive.namelist()
-                              if n.endswith(f".dist-info/{suffix}"))
+                  name = next(n for n in archive.namelist() if n.endswith(f".dist-info/{suffix}"))
                   return archive.read(name)
 
-          a, b = package(direct), package(rebuilt)
+
+          a, b = package(original), package(parity)
           report = {
-              "direct_and_rebuilt_package_members_equal": sorted(a) == sorted(b),
-              "direct_and_rebuilt_package_bytes_equal": a == b,
-              "entry_points_equal":
-                  dist_info(direct, "entry_points.txt") == dist_info(rebuilt, "entry_points.txt"),
+              "role": "parity_evidence_only",
+              "original_wheel_sha256": original_digest,
+              "parity_wheel_sha256": hashlib.sha256(parity.read_bytes()).hexdigest(),
+              "original_and_parity_package_members_equal": sorted(a) == sorted(b),
+              "original_and_parity_package_bytes_equal": a == b,
+              "entry_points_equal": dist_info(original, "entry_points.txt")
+              == dist_info(parity, "entry_points.txt"),
               "py_typed_equal": a.get("metrifid/py.typed") == b.get("metrifid/py.typed"),
           }
           fields = ("Name", "Version", "Summary", "Requires-Python", "License-Expression")
-          ma = BytesParser().parsebytes(dist_info(direct, "METADATA"))
-          mb = BytesParser().parsebytes(dist_info(rebuilt, "METADATA"))
-          report["metadata_semantically_equal"] = (
-              all(ma.get(f) == mb.get(f) for f in fields)
-              and sorted(ma.get_all("Requires-Dist") or []) == sorted(mb.get_all("Requires-Dist") or [])
+          ma = BytesParser().parsebytes(dist_info(original, "METADATA"))
+          mb = BytesParser().parsebytes(dist_info(parity, "METADATA"))
+          report["metadata_semantically_equal"] = all(
+              ma.get(f) == mb.get(f) for f in fields
+          ) and sorted(ma.get_all("Requires-Dist") or []) == sorted(
+              mb.get_all("Requires-Dist") or []
           )
           pathlib.Path("equivalence/distribution_equivalence.json").write_text(
-              json.dumps(report, indent=2) + "\n", encoding="utf-8")
-          print(json.dumps(report, indent=2))
-          assert all(report.values()), report
+              json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+          )
+          print(json.dumps(report, indent=2, sort_keys=True))
+          assert all(
+              value for key, value in report.items() if key.endswith("_equal")
+          ), report
           PY
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
@@ -442,171 +926,165 @@ jobs:
           path: equivalence/
           if-no-files-found: error
 
-  release_matrix_summary:
-    name: release compatibility summary
-    needs: [matrix_lane, minimum_dependency_lane, sdist_install_lane, distribution_equivalence, test_composite_action]
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
-        with:
-          pattern: lane-*
-          path: lane-artifacts
-          merge-multiple: false
-
-      - name: Verify one wheel and one exact test contract across all blocking lanes
-        run: |
-          python - <<'PY'
-          from pathlib import Path
-          import xml.etree.ElementTree as ET
-
-          expected_lanes = {
-              "linux_x64_py311",
-              "linux_x64_py312",
-              "linux_x64_py313",
-              "linux_x64_py314",
-              "linux_x64_py311_numpy_min",
-              "macos_arm64_py311",
-              "macos_arm64_py312",
-              "macos_arm64_py313",
-              "macos_arm64_py314",
-              "macos_x64_py311",
-              "macos_x64_py312",
-              "macos_x64_py313",
-              "macos_x64_py314",
-          }
-          root = Path("lane-artifacts")
-          lane_dirs = {path.name.removeprefix("lane-"): path for path in root.glob("lane-*") if path.is_dir()}
-          assert set(lane_dirs) == expected_lanes, (set(lane_dirs), expected_lanes)
-
-          def junit_contract(path: Path) -> tuple[set[str], set[str]]:
-              tree = ET.parse(path)
-              cases: set[str] = set()
-              skipped: set[str] = set()
-              for case in tree.iter("testcase"):
-                  identity = f"{case.attrib.get('classname', '')}::{case.attrib.get('name', '')}"
-                  assert identity not in cases, identity
-                  cases.add(identity)
-                  assert case.find("failure") is None, identity
-                  assert case.find("error") is None, identity
-                  if case.find("skipped") is not None:
-                      skipped.add(identity)
-              assert cases, path
-              return cases, skipped
-
-          wheel_digests: set[str] = set()
-          baseline_cases: set[str] | None = None
-          baseline_skips: set[str] | None = None
-          for lane_id in sorted(expected_lanes):
-              directory = lane_dirs[lane_id]
-              assert (directory / "lane_id.txt").read_text(encoding="utf-8").strip() == lane_id
-              digest = (directory / "wheel.sha256").read_text(encoding="utf-8").strip()
-              assert len(digest) == 64 and all(ch in "0123456789abcdef" for ch in digest), digest
-              wheel_digests.add(digest)
-              cases, skipped = junit_contract(directory / "full.xml")
-              if baseline_cases is None:
-                  baseline_cases, baseline_skips = cases, skipped
-              else:
-                  assert cases == baseline_cases, lane_id
-                  assert skipped == baseline_skips, lane_id
-              example = (directory / "example.log").read_text(encoding="utf-8")
-              assert "CERTIFIED_COMPILED_EQUIVALENCE" in example, lane_id
-              assert "NOT_CERTIFIED_COMPILED_DIFFERS" in example, lane_id
-              assert "all 6 checks passed" in example, lane_id
-              mjb = (directory / "mjb.log").read_text(encoding="utf-8")
-              assert "all 29 checks passed" in mjb, lane_id
-              cli_help = (directory / "cli_help.log").read_text(encoding="utf-8")
-              for command in ("certify", "compare", "audit-timestep"):
-                  assert command in cli_help, (lane_id, command)
-              randomized = directory / "randomized.xml"
-              if lane_id == "linux_x64_py312":
-                  random_cases, random_skips = junit_contract(randomized)
-                  assert random_cases == cases
-                  assert random_skips == skipped
-              else:
-                  assert not randomized.exists(), lane_id
-          assert len(wheel_digests) == 1, wheel_digests
-          print("PASS_METRIFID_RELEASE_MATRIX")
-          PY
-
-  experimental_lane:
-    name: linux_arm64_py312 (experimental)
+  expanded_full_diagnostics:
+    name: diagnostic ${{ matrix.id }}
+    # Opt-in only, nonblocking, and outside the default summary. This is where the broad
+    # interpreter/OS matrix lives now: useful when investigating a portability question, wasteful
+    # on every ordinary push.
+    if: github.event_name == 'workflow_dispatch' && inputs.expanded_full_matrix
     needs: build_and_quality
-    runs-on: ubuntu-24.04-arm
-    # The hosted Linux arm64 runner is public preview, so this lane is informative only and
-    # cannot block release readiness until that runner is generally available.
+    runs-on: ${{ matrix.runner }}
     continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: linux_x64_py311
+            runner: ubuntu-24.04
+            python: "3.11"
+            intel_mujoco_pin: "false"
+          - id: linux_x64_py312
+            runner: ubuntu-24.04
+            python: "3.12"
+            intel_mujoco_pin: "false"
+          - id: linux_x64_py313
+            runner: ubuntu-24.04
+            python: "3.13"
+            intel_mujoco_pin: "false"
+          - id: linux_x64_py314
+            runner: ubuntu-24.04
+            python: "3.14"
+            intel_mujoco_pin: "false"
+          - id: macos_arm64_py311
+            runner: macos-15
+            python: "3.11"
+            intel_mujoco_pin: "false"
+          - id: macos_arm64_py312
+            runner: macos-15
+            python: "3.12"
+            intel_mujoco_pin: "false"
+          - id: macos_arm64_py313
+            runner: macos-15
+            python: "3.13"
+            intel_mujoco_pin: "false"
+          - id: macos_arm64_py314
+            runner: macos-15
+            python: "3.14"
+            intel_mujoco_pin: "false"
+          - id: macos_x64_py311
+            runner: macos-15-intel
+            python: "3.11"
+            intel_mujoco_pin: "true"
+          - id: macos_x64_py312
+            runner: macos-15-intel
+            python: "3.12"
+            intel_mujoco_pin: "true"
+          - id: macos_x64_py313
+            runner: macos-15-intel
+            python: "3.13"
+            intel_mujoco_pin: "true"
+          - id: macos_x64_py314
+            runner: macos-15-intel
+            python: "3.14"
+            intel_mujoco_pin: "true"
+          - id: linux_arm64_py312
+            runner: ubuntu-24.04-arm
+            python: "3.12"
+            intel_mujoco_pin: "false"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python }}
 
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
-          name: ${{ env.WHEEL_ARTIFACT }}
+          name: ${{ env.ORIGINAL_ARTIFACT }}
           path: release-artifacts
 
-      - name: Verify and install the exact built wheel with the normal resolver
+      - name: Constrain MuJoCo to a published binary on macOS Intel only
+        if: matrix.intel_mujoco_pin == 'true'
+        run: |
+          printf 'mujoco==3.10.0\n' > "$RUNNER_TEMP/intel-constraint.txt"
+          echo "PIP_CONSTRAINT=$RUNNER_TEMP/intel-constraint.txt" >> "$GITHUB_ENV"
+          echo "PIP_ONLY_BINARY=mujoco" >> "$GITHUB_ENV"
+
+      - name: Verify and install the exact original wheel
         run: |
           python - <<'PY'
           import hashlib
+          import json
           import pathlib
 
+          manifest = json.loads(
+              pathlib.Path("release-artifacts/original_manifest.json").read_text(encoding="utf-8")
+          )
           wheels = sorted(pathlib.Path("release-artifacts/dist").glob("*.whl"))
-          assert len(wheels) == 1, wheels
-          expected = pathlib.Path("release-artifacts/wheel.sha256").read_text(encoding="utf-8").strip()
-          actual = hashlib.sha256(wheels[0].read_bytes()).hexdigest()
-          assert actual == expected, (actual, expected)
+          digest = hashlib.sha256(wheels[0].read_bytes()).hexdigest()
+          assert digest == manifest["wheel"]["sha256"], (digest, manifest["wheel"])
           PY
           python -m pip install "$(ls release-artifacts/dist/*.whl)"
           python -m pip install -c .github/quality-constraints.txt \
-            editables hatchling hypothesis mypy pytest pytest-randomly
+            build editables hatchling hypothesis mypy pytest pytest-check \
+            pytest-randomly pytest-xdist
 
-      - name: Lane runtime identity
-        run: python -m pip check
-
-      - name: Installed-wheel test suite
-        run: python -m pytest -q tests
-
-      - name: Bundled first-use example
-        run: python examples/certify/run_example.py
-
-      - name: CLI help smoke
+      - name: Record the diagnostic runtime identity
         run: |
-          metrifid --help
-          metrifid certify --help
-          metrifid compare --help
-          metrifid audit-timestep --help
+          python -m pip check
+          mkdir -p diagnostic-evidence
+          python - <<'PY'
+          import json
+          import pathlib
+          import platform
+          import sys
 
-      - name: Wheel-only demo from an empty directory
-        run: |
-          mkdir -p "$RUNNER_TEMP/demo-empty"
-          cd "$RUNNER_TEMP/demo-empty"
-          python -m metrifid.demo | tee "$GITHUB_WORKSPACE/lane-evidence/demo.log"
+          import mujoco
+          import numpy
 
-      - name: SDK examples from a copied directory
-        run: |
-          rm -rf "$RUNNER_TEMP/sdk-copy" && mkdir -p "$RUNNER_TEMP/sdk-copy"
-          cp examples/sdk/*.py "$RUNNER_TEMP/sdk-copy/"
-          cd "$RUNNER_TEMP/sdk-copy"
-          for script in certify_api.py compare_api.py audit_api.py; do
-            python "$script"
-          done | tee "$GITHUB_WORKSPACE/lane-evidence/sdk_examples.log"
+          from metrifid._mujoco_runtime import admit_mujoco_runtime
 
-      - name: Source-checkout comparison example
-        run: |
-          rm -rf "$RUNNER_TEMP/compare-copy" && mkdir -p "$RUNNER_TEMP/compare-copy"
-          cp -R examples/compare/. "$RUNNER_TEMP/compare-copy/"
-          cd "$RUNNER_TEMP/compare-copy"
-          python prepare_workload.py
-          metrifid compare comparison.json | tee "$GITHUB_WORKSPACE/lane-evidence/compare_example.log"
+          # The same structural fields every required lane records. This job is nonblocking and
+          # stays outside the summary decision, but a document missing half its fields could not be
+          # compared with a required lane if a portability question ever needed answering, which is
+          # the entire reason the job exists.
+          admission = admit_mujoco_runtime()
+          identity = {
+              "package_version": mujoco.__version__,
+              "package_base_version": admission.package_base_version,
+              "native_version_string": mujoco.mj_versionString(),
+              "native_version_integer": mujoco.mj_version(),
+              "numpy_version": numpy.__version__,
+              "platform_machine": platform.machine(),
+              "platform_system": platform.system(),
+              "python_version": sys.version,
+              "python_major_minor": f"{sys.version_info.major}.{sys.version_info.minor}",
+              "support_tier": admission.support_tier.value,
+          }
+          pathlib.Path("diagnostic-evidence/runtime_identity.json").write_text(
+              json.dumps(identity, indent=2, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          print(json.dumps(identity, sort_keys=True))
+          PY
 
-      - name: MJB characterization (29 checks, lane-local)
-        run: python tools/mjb_characterization.py
+      - name: Complete installed-wheel test suite
+        run: >-
+          python -m pytest -q -n auto --dist loadfile --randomly-seed=17
+          --junitxml=diagnostic-evidence/full.xml tests
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          # The `diagnostic-` prefix is what the summary uses to ignore this evidence.
+          name: diagnostic-${{ matrix.id }}
+          path: diagnostic-evidence/
+          if-no-files-found: error
 
   test_composite_action:
     name: test the composite action integration
+    # `action.yml` is a separately shipped entry surface, so it keeps its own integration test. The
+    # wheel this job builds for itself is action evidence only and is never uploaded as a lane
+    # artifact or compared with the original publication candidate.
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -629,13 +1107,13 @@ jobs:
             </worldbody>
           </mujoco>
           EOF
-          
+
           # For testing adversarial inputs
           mkdir -p 'fixtures/adverse/; $(echo injected);/dir'
           cp fixtures/baseline/model.xml 'fixtures/adverse/; $(echo injected);/dir/model.xml'
 
           # For testing leading dash inputs
-          cp fixtures/baseline/model.xml "-model.xml"
+          cp fixtures/baseline/model.xml ./-model.xml
 
       - name: Test valid model equivalence (Exit 0)
         id: test_0
@@ -644,7 +1122,7 @@ jobs:
           baseline_mjcf: fixtures/baseline/model.xml
           candidate_mjcf: fixtures/candidate/model.xml
           python_version: "3.11"
-          
+
       - name: Verify Exit 0 Outputs
         run: |
           if [ "${{ steps.test_0.outputs.exit_code }}" != "0" ]; then exit 1; fi
@@ -672,7 +1150,7 @@ jobs:
           baseline_mjcf: fixtures/baseline/model.xml
           candidate_mjcf: 'fixtures/adverse/; $(echo injected);/dir/model.xml'
           python_version: "3.11"
-          
+
       - name: Verify adversarial outputs
         run: |
           if [ "${{ steps.test_adverse.outputs.exit_code }}" != "0" ]; then exit 1; fi
@@ -745,3 +1223,83 @@ jobs:
       - name: Verify remote outputs
         run: |
           if [ "${{ steps.test_remote.outputs.exit_code }}" != "0" ]; then exit 1; fi
+
+  release_matrix_summary:
+    name: release compatibility summary
+    # Exactly `always()`, with no event condition. A conditionally skipped job is reported to
+    # branch protection as a successful status, so a required check must never be skippable. Any
+    # extra condition here would reintroduce that false green.
+    if: always()
+    needs:
+      - build_and_quality
+      - matrix_lane
+      - minimum_dependency_lane
+      - retained_compatibility_lane
+      - sdist_install_lane
+      - distribution_equivalence
+      - test_composite_action
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.12"
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        if: needs.build_and_quality.result == 'success'
+        with:
+          name: ${{ env.ORIGINAL_ARTIFACT }}
+          path: evidence/original-artifacts
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        continue-on-error: true
+        with:
+          pattern: lane-*
+          path: evidence
+          merge-multiple: false
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        continue-on-error: true
+        with:
+          pattern: retained-*
+          path: evidence
+          merge-multiple: false
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        continue-on-error: true
+        with:
+          name: sdist-install-evidence
+          path: evidence/sdist-install-evidence
+
+      # Downloaded on purpose. The helper must be able to see diagnostic evidence and ignore it,
+      # which is a stronger guarantee than never letting it near the decision.
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        continue-on-error: true
+        with:
+          pattern: diagnostic-*
+          path: evidence
+          merge-multiple: false
+
+      - name: Decide release evidence
+        # The only decision authority. It reads the upstream results and the downloaded evidence
+        # and exits nonzero on any violation; there is no shell fallback that could soften that.
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_SHA: ${{ github.sha }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          UPSTREAM_RESULTS: >-
+            {"build_and_quality": "${{ needs.build_and_quality.result }}",
+             "matrix_lane": "${{ needs.matrix_lane.result }}",
+             "minimum_dependency_lane": "${{ needs.minimum_dependency_lane.result }}",
+             "retained_compatibility_lane": "${{ needs.retained_compatibility_lane.result }}",
+             "sdist_install_lane": "${{ needs.sdist_install_lane.result }}",
+             "distribution_equivalence": "${{ needs.distribution_equivalence.result }}",
+             "test_composite_action": "${{ needs.test_composite_action.result }}"}
+        run: |
+          python .github/scripts/validate_ci_evidence.py \
+            --evidence-root evidence \
+            --upstream-results "$UPSTREAM_RESULTS" \
+            --event-name "$EVENT_NAME" \
+            --event-sha "$EVENT_SHA" \
+            --pull-request-head-sha "$PR_HEAD_SHA"

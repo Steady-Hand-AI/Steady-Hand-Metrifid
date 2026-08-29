@@ -17,7 +17,9 @@ from .version import __version__
 
 # The exact operations that may own a distribution-identity failure. A refusal must name the
 # command that actually refused, so this method takes the operation with no default.
-OperationName: TypeAlias = Literal["compare", "certify", "audit-timestep"]
+OperationName: TypeAlias = Literal[
+    "compare", "certify", "audit-timestep", "review-model", "qualify-workload"
+]
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,7 +62,7 @@ class DistributionIdentityError(ValueError):
 
         Args:
             operation: The command that actually refused. A distribution-identity failure raised
-                under ``certify`` must be reported as ``certify``, not as ``compare``.
+                under ``certify`` or ``review-model`` must name that command, not ``compare``.
         """
         mismatch_reasons = {
             OperationalReasonCode.EXECUTING_CODE_NOT_INSTALLED_DISTRIBUTION,

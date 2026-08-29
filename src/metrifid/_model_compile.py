@@ -9,10 +9,9 @@ from __future__ import annotations
 
 import os
 import platform
-import re
 import sys
 import threading
-from collections.abc import Callable, Iterable
+from collections.abc import Iterable
 from typing import SupportsInt, cast
 
 import mujoco  # type: ignore[import-untyped]
@@ -22,6 +21,12 @@ from ._model_dependencies import (
     discover_snapshot_dependencies,
     first_complete_root_element,
     read_measured_entrypoint_bytes,
+)
+from ._mujoco_runtime import (
+    MujocoClaimSurface,
+    MujocoRuntimeAdmission,
+    admit_model_feature_coverage,
+    admit_mujoco_runtime,
 )
 from .json_values import CanonicalValue
 from .operational import OperationalReasonCode
@@ -41,26 +46,19 @@ _REQUIRED_CALLABLES: tuple[str, ...] = (
     "close",
 )
 _REQUIRED_FLAGS: tuple[str, ...] = ("O_DIRECTORY", "O_NOFOLLOW", "O_NONBLOCK")
-# The engine profile is exact: only the stable 3.10.0 release family is admitted. A binding-only
-# ``.postN`` rebuild targets that same native engine and is accepted; prerelease, development,
-# 3.10.1 and 3.11+ package versions are not.
-_MUJOCO_PACKAGE_PATTERN = re.compile(
-    r"\A3\.10\.0(?:\.post(?:0|[1-9][0-9]*))?(?:\+[a-z0-9]+(?:[._-][a-z0-9]+)*)?\Z",
-    re.IGNORECASE,
-)
 _COMPILE_LOCK = threading.RLock()
-_CALLBACK_ACCESSORS: tuple[tuple[str, Callable[[], object | None]], ...] = (
-    ("mjcb_control", mujoco.get_mjcb_control),
-    ("mjcb_sensor", mujoco.get_mjcb_sensor),
-    ("mjcb_passive", mujoco.get_mjcb_passive),
-    ("mjcb_act_dyn", mujoco.get_mjcb_act_dyn),
-    ("mjcb_act_gain", mujoco.get_mjcb_act_gain),
-    ("mjcb_act_bias", mujoco.get_mjcb_act_bias),
-    ("mjcb_contactfilter", mujoco.get_mjcb_contactfilter),
-    ("mjcb_time", mujoco.get_mjcb_time),
-    ("mju_user_warning", mujoco.get_mju_user_warning),
-    ("mju_user_malloc", mujoco.get_mju_user_malloc),
-    ("mju_user_free", mujoco.get_mju_user_free),
+_CALLBACK_ACCESSORS: tuple[tuple[str, str], ...] = (
+    ("mjcb_control", "get_mjcb_control"),
+    ("mjcb_sensor", "get_mjcb_sensor"),
+    ("mjcb_passive", "get_mjcb_passive"),
+    ("mjcb_act_dyn", "get_mjcb_act_dyn"),
+    ("mjcb_act_gain", "get_mjcb_act_gain"),
+    ("mjcb_act_bias", "get_mjcb_act_bias"),
+    ("mjcb_contactfilter", "get_mjcb_contactfilter"),
+    ("mjcb_time", "get_mjcb_time"),
+    ("mju_user_warning", "get_mju_user_warning"),
+    ("mju_user_malloc", "get_mju_user_malloc"),
+    ("mju_user_free", "get_mju_user_free"),
 )
 
 
@@ -133,40 +131,18 @@ def _require_posix_platform() -> None:
         )
 
 
-def _is_supported_mujoco_package(version: object) -> bool:
-    """Report whether one MuJoCo distribution version targets the exact 3.10.0 engine family."""
-    return isinstance(version, str) and _MUJOCO_PACKAGE_PATTERN.match(version) is not None
-
-
-def _require_mujoco_engine() -> None:
-    """Refuse a MuJoCo package or loaded native engine outside the exact 3.10.0 profile."""
-    package_version = getattr(mujoco, "__version__", None)
-    if not _is_supported_mujoco_package(package_version):
-        raise refuse(
-            OperationalReasonCode.UNSUPPORTED_MUJOCO_VERSION,
-            "comparison",
-            mujoco_python_version=package_version if isinstance(package_version, str) else None,
-        )
-    native_string, native_integer = mujoco.mj_versionString(), mujoco.mj_version()
-    if native_string != "3.10.0" or native_integer != 3010000:
-        raise refuse(
-            OperationalReasonCode.MUJOCO_PYTHON_NATIVE_VERSION_MISMATCH,
-            "comparison",
-            mujoco_python_version=package_version,
-            native_version_string=native_string,
-            native_version_integer=native_integer,
-        )
-
-
-def require_supported_runtime() -> None:
+def require_supported_runtime(
+    operation: MujocoClaimSurface = MujocoClaimSurface.COMPILED_ARTIFACT,
+) -> MujocoRuntimeAdmission:
     """Admit the shared native runtime for every compile or step path.
 
-    Certify, Compare, Audit Timestep and compiled model identity all pass through this one gate.
-    Pure artifact writers, canonical JSON helpers and receipt validation never call it.
+    Certify defaults to its complete-artifact call graph for backward-compatible callers. Dynamic
+    and static orchestration pass their explicit claim surfaces. Pure artifact writers, canonical
+    JSON helpers and receipt validation never call this native boundary.
     """
     _require_minimum_python()
     _require_posix_platform()
-    _require_mujoco_engine()
+    return admit_mujoco_runtime(operation)
 
 
 def _compile_reason(role: ModelRole, *, warning: bool) -> OperationalReasonCode:
@@ -192,8 +168,8 @@ def _require_mjcf_root(snapshot: ModelClosureSnapshot, role: ModelRole) -> None:
     The entrypoint bytes are read through the same no-follow, size- and hash-verified path used by
     dependency discovery, so a missing, symlinked, non-regular, or mutated entrypoint refuses before
     MuJoCo runs. Only the first complete top-level element is required to be ``mujoco``; trailing
-    bytes are ignored here because MuJoCo 3.10.0 tolerates them and remains the final syntax and
-    compile authority.
+    bytes are ignored here because the admitted MuJoCo compiler tolerates them and remains the
+    final syntax and compile authority.
     """
     root = first_complete_root_element(read_measured_entrypoint_bytes(snapshot, role))
     if root is None:
@@ -218,7 +194,11 @@ def compile_snapshot_model(snapshot: ModelClosureSnapshot, role: ModelRole) -> m
         raise ValueError("model compilation requires a baseline or candidate role")
     warnings: list[str] = []
     with _COMPILE_LOCK:
-        active = [name for name, getter in _CALLBACK_ACCESSORS if getter() is not None]
+        active = [
+            name
+            for name, getter_name in _CALLBACK_ACCESSORS
+            if getattr(mujoco, getter_name)() is not None
+        ]
         if active:
             raise refuse(
                 OperationalReasonCode.UNSUPPORTED_USER_CALLBACK,
@@ -278,9 +258,10 @@ def _active_history_arrays(model: mujoco.MjModel) -> dict[str, list[int]]:
 
 def _user_actuator_indices(model: mujoco.MjModel) -> list[int]:
     """Return actuator indices that invoke user gain, bias, or dynamics callbacks."""
+    actuator_count = int(getattr(model, "nactuator", model.nu))
     return [
         index
-        for index in range(model.nu)
+        for index in range(actuator_count)
         if int(model.actuator_dyntype[index]) == int(mujoco.mjtDyn.mjDYN_USER)
         or int(model.actuator_gaintype[index]) == int(mujoco.mjtGain.mjGAIN_USER)
         or int(model.actuator_biastype[index]) == int(mujoco.mjtBias.mjBIAS_USER)
@@ -292,7 +273,11 @@ def _sensor_indices(model: mujoco.MjModel, sensor_type: int) -> list[int]:
     return [index for index in range(model.nsensor) if int(model.sensor_type[index]) == sensor_type]
 
 
-def admit_external_implementation_free_model(model: mujoco.MjModel, role: ModelRole) -> None:
+def admit_external_implementation_free_model(
+    model: mujoco.MjModel,
+    role: ModelRole,
+    runtime: MujocoRuntimeAdmission | None = None,
+) -> None:
     """Refuse a compiled model whose meaning depends on implementation outside this process.
 
     This is the admission subset a compile-only operation needs. Plugins, user callbacks and
@@ -301,6 +286,8 @@ def admit_external_implementation_free_model(model: mujoco.MjModel, role: ModelR
     """
     if role not in {"baseline", "candidate"}:
         raise ValueError("model admission requires a baseline or candidate role")
+    if runtime is not None:
+        admit_model_feature_coverage(model, runtime, role)
     plugin_arrays = _active_plugin_arrays(model)
     if model.nplugin != 0 or model.npluginstate != 0 or plugin_arrays:
         raise refuse(
@@ -328,9 +315,13 @@ def admit_external_implementation_free_model(model: mujoco.MjModel, role: ModelR
         )
 
 
-def admit_compiled_model(model: mujoco.MjModel, role: ModelRole) -> None:
-    """Admit a model for replay: the shared seam plus the stepping-only refusals."""
-    admit_external_implementation_free_model(model, role)
+def admit_compiled_model(
+    model: mujoco.MjModel,
+    role: ModelRole,
+    runtime: MujocoRuntimeAdmission | None = None,
+) -> None:
+    """Admit a model for replay through feature, external-code, and dynamic-state gates."""
+    admit_external_implementation_free_model(model, role, runtime)
     history_arrays = _active_history_arrays(model)
     if model.nhistory != 0 or history_arrays:
         raise refuse(

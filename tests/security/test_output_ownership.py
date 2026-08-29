@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import os
+from collections import Counter
 from contextlib import nullcontext
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
 from typing import Any
 
@@ -28,6 +29,9 @@ from metrifid._npz import ArtifactAdmissionRefusal
 from metrifid.certify import _run as certify_run
 from metrifid.certify._status import CertifyStatus
 from metrifid.compare import _orchestrator as compare_orchestrator
+from metrifid.compare._failure import ComparisonOperationError
+from metrifid.operational import OperationalReasonCode
+from metrifid.workload_qualification import qualify_configuration_file
 
 _PAIR_NAMES = PairedOutputNames("result.json", "result.md")
 _AUDIT_NAMES = PairedOutputNames("timestep_audit.json", "timestep_audit.md")
@@ -606,13 +610,49 @@ def test_compare_verifies_outputs_after_source_reverification(
     assert events == ["sources", "publish", "sources", "outputs", "close"]
 
 
+class _SpyRoleArtifact:
+    """Record when one role's retained compiled subject is reverified and released."""
+
+    def __init__(self, events: list[str], role: str) -> None:
+        """Bind this spy to the shared ordering log and the role it stands in for."""
+        self.serialized = _SpySerialized(events, role)
+
+
+class _SpySerialized:
+    """Stand in for one serialized artifact and its retained descriptor."""
+
+    def __init__(self, events: list[str], role: str) -> None:
+        """Record the ordering log, the role, and the retained-subject spy."""
+        self._events = events
+        self._role = role
+        self.header_words = (1, 2, 3, 4)
+        self.retained = _SpyRetainedSubject(events, role)
+
+    def verify(self) -> None:
+        """Record one retained-subject reverification at a decision boundary."""
+        self._events.append(f"subject-verify:{self._role}")
+
+
+class _SpyRetainedSubject:
+    """Stand in for one retained compiled-artifact descriptor."""
+
+    def __init__(self, events: list[str], role: str) -> None:
+        """Record the ordering log and the role this descriptor belongs to."""
+        self._events = events
+        self._role = role
+
+    def close(self) -> None:
+        """Record the release of one retained compiled-artifact descriptor."""
+        self._events.append(f"subject-close:{self._role}")
+
+
 def test_certify_verifies_outputs_after_source_reverification(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Place final certification output verification after both final source checks."""
     events: list[str] = []
     snapshots = {role: SimpleNamespace(role=role) for role in ("baseline", "candidate")}
-    role_artifact = SimpleNamespace(serialized=SimpleNamespace(header_words=(1, 2, 3, 4)))
+    artifacts = {role: _SpyRoleArtifact(events, role) for role in ("baseline", "candidate")}
     published = _SpyPublished(events, tmp_path)
 
     def snapshot_context(_root: Path, _entrypoint: str, role: str) -> Any:
@@ -629,7 +669,9 @@ def test_certify_verifies_outputs_after_source_reverification(
         events.append(f"source:{role}")
 
     monkeypatch.setattr(certify_run, "create_model_closure_snapshot", snapshot_context)
-    monkeypatch.setattr(certify_run, "_certify_role", lambda *_args: role_artifact)
+    monkeypatch.setattr(
+        certify_run, "_certify_role", lambda _snapshot, role, _scratch: artifacts[role]
+    )
     monkeypatch.setattr(certify_run, "build_certify_runtime_identity", lambda _words: object())
     monkeypatch.setattr(certify_run, "_certify_decision", _certified_decision)
     monkeypatch.setattr(certify_run, "verify_model_closure_unchanged", verify_source)
@@ -649,9 +691,15 @@ def test_certify_verifies_outputs_after_source_reverification(
     assert events == [
         "source:baseline",
         "source:candidate",
+        "subject-verify:baseline",
+        "subject-verify:candidate",
         "publish",
         "source:baseline",
         "source:candidate",
+        "subject-verify:baseline",
+        "subject-verify:candidate",
+        "subject-close:baseline",
+        "subject-close:candidate",
         "outputs",
         "pair-close",
         "dir-close",
@@ -746,7 +794,6 @@ def test_certify_rejects_replaced_public_output_path_after_source_context(
     attacker = tmp_path / "certification-attacker"
     attacker.mkdir()
     snapshots = {role: SimpleNamespace(role=role) for role in ("baseline", "candidate")}
-    role_artifact = SimpleNamespace(serialized=SimpleNamespace(header_words=(1, 2, 3, 4)))
 
     class SnapshotContext:
         """Return one lightweight snapshot and replace the public path on final context exit."""
@@ -769,12 +816,15 @@ def test_certify_rejects_replaced_public_output_path_after_source_context(
                     ("certification.json", "certification.md"),
                 )
 
+    subjects = {role: _SpyRoleArtifact([], role) for role in ("baseline", "candidate")}
     monkeypatch.setattr(
         certify_run,
         "create_model_closure_snapshot",
         lambda _root, _entrypoint, role: SnapshotContext(role),
     )
-    monkeypatch.setattr(certify_run, "_certify_role", lambda *_args: role_artifact)
+    monkeypatch.setattr(
+        certify_run, "_certify_role", lambda _snapshot, role, _scratch: subjects[role]
+    )
     monkeypatch.setattr(certify_run, "build_certify_runtime_identity", lambda _words: object())
     monkeypatch.setattr(certify_run, "_certify_decision", _certified_decision)
     monkeypatch.setattr(certify_run, "verify_model_closure_unchanged", lambda *_args: None)
@@ -831,3 +881,365 @@ def test_audit_rejects_public_path_replaced_during_aggregate_verification(
     assert (displaced / "timestep_audit.md").read_bytes() == b"GOOD\n"
     registry.close()
     output.close()
+
+
+class _DescriptorLedger:
+    """Count every descriptor lifetime one operation opens and closes.
+
+    Counting lifetimes rather than collecting numbers is what makes this honest: the operating
+    system reuses descriptor numbers freely, so a set of opened numbers minus a set of closed ones
+    hides both a leak that happens to reuse a closed number and a double close of a live one.
+    """
+
+    def __init__(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Wrap the descriptor primitives the owned-output module uses."""
+        self.opens: Counter[int] = Counter()
+        self.closes: Counter[int] = Counter()
+        real_open, real_dup, real_close = os.open, os.dup, os.close
+
+        def opening(*args: Any, **kwargs: Any) -> int:
+            descriptor = real_open(*args, **kwargs)
+            self.opens[descriptor] += 1
+            return descriptor
+
+        def duplicating(fd: int) -> int:
+            descriptor = real_dup(fd)
+            self.opens[descriptor] += 1
+            return descriptor
+
+        def closing(fd: int) -> None:
+            self.closes[fd] += 1
+            real_close(fd)
+
+        monkeypatch.setattr(os, "open", opening)
+        monkeypatch.setattr(os, "dup", duplicating)
+        monkeypatch.setattr(os, "close", closing)
+
+    @property
+    def imbalance(self) -> dict[int, int]:
+        """Return descriptor numbers whose opened and closed lifetimes do not balance."""
+        numbers = set(self.opens) | set(self.closes)
+        return {
+            fd: self.opens[fd] - self.closes[fd]
+            for fd in numbers
+            if self.opens[fd] != self.closes[fd]
+        }
+
+
+def _swap_directory(parent: Path, name: str) -> Path:
+    """Deterministically replace one real directory with a different real directory."""
+    victim = parent / name
+    displaced = parent / f"{name}.displaced"
+    decoy = parent / f"{name}.decoy"
+    decoy.mkdir()
+    victim.rename(displaced)
+    decoy.rename(victim)
+    return displaced
+
+
+def _stat_then_swap(
+    monkeypatch: pytest.MonkeyPatch, parent: Path, name: str
+) -> dict[str, Path | None]:
+    """Replace `name` under `parent` immediately after its no-follow named stat succeeds."""
+    real_stat = os.stat
+    state: dict[str, Path | None] = {"displaced": None}
+
+    def stat_then_replace(target: Any, *args: Any, **kwargs: Any) -> os.stat_result:
+        info = real_stat(target, *args, **kwargs)
+        if target == name and kwargs.get("dir_fd") is not None and state["displaced"] is None:
+            state["displaced"] = _swap_directory(parent, name)
+        return info
+
+    monkeypatch.setattr(os, "stat", stat_then_replace)
+    return state
+
+
+def test_a_created_output_root_replaced_between_stat_and_open_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Opening a named directory is not binding it; the two observations must agree.
+
+    A replacement performed between the no-follow stat that names the object and the open that
+    takes it is invisible to an open alone, so the class would bind and write into a directory it
+    never admitted.
+    """
+    from metrifid.workload_qualification._owned_output import OwnedOutputError, OwnedOutputRoot
+
+    parent = tmp_path / "parent"
+    parent.mkdir()
+    ledger = _DescriptorLedger(monkeypatch)
+    state = _stat_then_swap(monkeypatch, parent, "out")
+
+    with pytest.raises(OwnedOutputError, match="replaced between being named and being opened"):
+        OwnedOutputRoot(parent / "out")
+
+    assert state["displaced"] is not None
+    assert ledger.imbalance == {}
+
+
+def test_an_owner_created_child_replaced_between_stat_and_open_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The same agreement is required of every child the owner descends into afterwards."""
+    from metrifid.workload_qualification._owned_output import OwnedOutputError, OwnedOutputRoot
+
+    parent = tmp_path / "parent"
+    parent.mkdir()
+    owned = OwnedOutputRoot(parent / "out")
+    owned.make_directory(PurePosixPath("evidence"))
+    ledger = _DescriptorLedger(monkeypatch)
+    state = _stat_then_swap(monkeypatch, owned.path, "evidence")
+
+    with pytest.raises(OwnedOutputError, match="replaced between being named and being opened"):
+        owned.open_owned_directory(PurePosixPath("evidence"))
+
+    assert state["displaced"] is not None
+    assert ledger.imbalance == {}
+    owned.close()
+
+
+def test_a_foreign_directory_under_the_owned_root_is_not_adopted(tmp_path: Path) -> None:
+    """A directory this run did not create is not owned merely by being a real directory."""
+    from metrifid.workload_qualification._owned_output import OwnedOutputError, OwnedOutputRoot
+
+    parent = tmp_path / "parent"
+    parent.mkdir()
+    owned = OwnedOutputRoot(parent / "out")
+    (owned.path / "evidence").mkdir()
+
+    with pytest.raises(OwnedOutputError, match="not this run's object to own"):
+        owned.make_directory(PurePosixPath("evidence"))
+    owned.close()
+
+
+def _decoy_for(public: Path) -> Path:
+    """Replace one public directory with an empty decoy and return the decoy."""
+    displaced = public.parent / f"{public.name}.displaced"
+    public.rename(displaced)
+    public.mkdir()
+    return public
+
+
+def test_a_replaced_cell_path_cannot_redirect_the_comparison_publication(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The comparison writes through the retained descriptor, so a path swap cannot redirect it.
+
+    The public pathname of the cell's output directory is replaced after the campaign has retained
+    that directory's descriptor and before the comparison publishes. A publisher that re-traversed
+    the pathname would write into the decoy; one that owns the descriptor cannot.
+    """
+    from metrifid.workload_qualification import _evidence as evidence
+    from tests._support.workload_qualification import write_case
+
+    case = tmp_path / "case"
+    write_case(case)
+    real_compare = evidence._compare_into_owned_output
+    decoys: list[Path] = []
+
+    def replace_then_compare(**kwargs: Any) -> Any:
+        """Swap the public output path immediately before the comparison publishes into it."""
+        if not decoys:
+            decoys.append(_decoy_for(Path(kwargs["output_display_path"])))
+        return real_compare(**kwargs)
+
+    monkeypatch.setattr(evidence, "_compare_into_owned_output", replace_then_compare)
+
+    with pytest.raises(ComparisonOperationError) as raised:
+        qualify_configuration_file(case / "qualification.json")
+
+    assert raised.value.failure.reason.code is OperationalReasonCode.OUTPUT_PATH_INVALID
+    assert decoys, "the probe never replaced the public cell path"
+    assert sorted(p.name for p in decoys[0].iterdir()) == []
+
+
+def test_a_replaced_receipt_path_cannot_redirect_the_aggregate_publication(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The aggregate publisher is built from the retained receipt-directory descriptor."""
+    from metrifid.workload_qualification import _run as qualification_run
+    from tests._support.workload_qualification import write_case
+
+    case = tmp_path / "case"
+    write_case(case)
+    real_publish = qualification_run.publish_paired_results
+    decoys: list[Path] = []
+
+    def replace_then_publish(output: Any, **kwargs: Any) -> Any:
+        """Swap the public receipt path immediately before the aggregate pair is written."""
+        if not decoys:
+            decoys.append(_decoy_for(Path(output.path)))
+        return real_publish(output, **kwargs)
+
+    monkeypatch.setattr(qualification_run, "publish_paired_results", replace_then_publish)
+
+    with pytest.raises(ArtifactAdmissionRefusal) as raised:
+        qualify_configuration_file(case / "qualification.json")
+
+    assert raised.value.reason is OperationalReasonCode.OUTPUT_PATH_INVALID
+    assert decoys, "the probe never replaced the public receipt path"
+    assert sorted(p.name for p in decoys[0].iterdir()) == []
+
+
+def _owned_root(tmp_path: Path) -> Any:
+    """Create one owned qualification root under a fresh parent."""
+    from metrifid.workload_qualification._owned_output import OwnedOutputRoot
+
+    parent = tmp_path / "parent"
+    parent.mkdir(exist_ok=True)
+    return OwnedOutputRoot(parent / "out")
+
+
+def test_retained_reads_open_without_blocking() -> None:
+    """A retained member is opened non-blocking, so a special file cannot wait in open."""
+    from metrifid.workload_qualification import _owned_output
+
+    assert _owned_output._FILE_READ_FLAGS & os.O_NONBLOCK == os.O_NONBLOCK
+    assert _owned_output._FILE_READ_FLAGS & os.O_NOFOLLOW == os.O_NOFOLLOW
+
+
+def test_a_retained_fifo_refuses_promptly_instead_of_waiting(tmp_path: Path) -> None:
+    """A FIFO substituted for a retained regular member refuses rather than waiting for a writer.
+
+    The precondition is asserted here, before the FIFO exists, because it is what makes the rest of
+    this test safe to run: without ``O_NONBLOCK`` the open below would wait for a writer that never
+    arrives. A future change that drops the flag therefore fails on this line rather than hanging.
+    """
+    from metrifid.workload_qualification import _owned_output
+    from metrifid.workload_qualification._owned_output import OwnedOutputError
+
+    assert _owned_output._FILE_READ_FLAGS & os.O_NONBLOCK == os.O_NONBLOCK
+
+    owned = _owned_root(tmp_path)
+    try:
+        os.mkfifo(owned.path / "member.json", 0o600)
+        with pytest.raises(OwnedOutputError, match="not a regular file"):
+            owned.read_bytes(PurePosixPath("member.json"), 4096)
+    finally:
+        owned.close()
+
+
+@pytest.mark.parametrize(
+    ("label", "mutate"),
+    [
+        pytest.param("same_size", lambda path: path.write_bytes(b"BBBB"), id="same_size_rewrite"),
+        pytest.param(
+            "growth", lambda path: path.write_bytes(b"AAAA" + b"C"), id="under_limit_growth"
+        ),
+        pytest.param("truncation", lambda path: path.write_bytes(b"A"), id="truncation"),
+    ],
+)
+def test_a_retained_member_changed_during_the_read_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, label: str, mutate: Any
+) -> None:
+    """A bounded read must finish on the object it started on, whatever the size does.
+
+    The mutation is injected immediately after the payload is read and before the closing
+    observation, which is the only window a caller could otherwise be handed bytes that no longer
+    describe the file on disk.
+    """
+    from metrifid.workload_qualification._owned_output import OwnedOutputError
+
+    owned = _owned_root(tmp_path)
+    try:
+        member = owned.path / "member.json"
+        owned.write_bytes(PurePosixPath("member.json"), b"AAAA")
+        real_read = os.read
+        state = {"mutated": False}
+
+        def read_then_mutate(fd: int, length: int) -> bytes:
+            """Rewrite the member once, after its bytes have been read."""
+            payload = real_read(fd, length)
+            if payload and not state["mutated"]:
+                state["mutated"] = True
+                mutate(member)
+            return payload
+
+        monkeypatch.setattr(os, "read", read_then_mutate)
+
+        with pytest.raises(OwnedOutputError, match="changed while it was being read"):
+            owned.read_bytes(PurePosixPath("member.json"), 4096)
+        assert state["mutated"], f"the {label} mutation was never injected"
+    finally:
+        owned.close()
+
+
+def test_a_creating_owner_refuses_an_unknown_child_through_a_direct_open(tmp_path: Path) -> None:
+    """Ownership comes from having created a child, not from the entry path used to reach it."""
+    from metrifid.workload_qualification._owned_output import OwnedOutputError
+
+    owned = _owned_root(tmp_path)
+    try:
+        (owned.path / "evidence").mkdir()
+        with pytest.raises(OwnedOutputError, match="not this run's object to own"):
+            owned.open_owned_directory(PurePosixPath("evidence"))
+    finally:
+        owned.close()
+
+
+def test_a_replay_binding_still_admits_honest_existing_children(tmp_path: Path) -> None:
+    """A read-only replay owner created nothing, so it adopts each real child it first descends."""
+    from metrifid.workload_qualification._owned_output import OwnedOutputRoot
+
+    owned = _owned_root(tmp_path)
+    owned.make_directory(PurePosixPath("evidence/controls"))
+    owned.write_bytes(PurePosixPath("evidence/controls/member.json"), b"{}\n")
+    owned.close()
+
+    replay = OwnedOutputRoot.bind_existing(tmp_path / "parent" / "out")
+    try:
+        assert replay.read_bytes(PurePosixPath("evidence/controls/member.json"), 4096) == b"{}\n"
+    finally:
+        replay.close()
+
+
+def test_a_failed_initial_fstat_closes_the_descriptor(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A descriptor is closed before a typed failure propagates, in both binding entry points."""
+    from metrifid.workload_qualification import _owned_output
+
+    parent = tmp_path / "parent"
+    parent.mkdir()
+    ledger = _DescriptorLedger(monkeypatch)
+    real_fstat = os.fstat
+    calls = {"count": 0}
+
+    def failing_fstat(fd: int) -> os.stat_result:
+        """Fail the first observation, then behave normally."""
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise OSError(5, "injected")
+        return real_fstat(fd)
+
+    monkeypatch.setattr(os, "fstat", failing_fstat)
+    with pytest.raises(OSError, match="injected"):
+        _owned_output._open_absolute_directory(parent, "probe")
+    assert ledger.imbalance == {}
+
+    calls["count"] = 0
+    descriptor = os.open(parent, os.O_RDONLY | os.O_DIRECTORY)
+    with pytest.raises(OSError, match="injected"):
+        PairedOutputDirectory._from_descriptor(parent, _PAIR_NAMES, descriptor)
+    assert ledger.imbalance == {}
+
+
+def test_the_descriptor_ledger_survives_reused_descriptor_numbers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Counting lifetimes, not numbers, is what makes the leak assertions meaningful."""
+    target = tmp_path / "file"
+    target.write_bytes(b"x")
+    ledger = _DescriptorLedger(monkeypatch)
+
+    first = os.open(target, os.O_RDONLY)
+    os.close(first)
+    second = os.open(target, os.O_RDONLY)
+    assert second == first, "this platform did not reuse the descriptor number"
+    assert ledger.imbalance == {second: 1}
+    os.close(second)
+    assert ledger.imbalance == {}
+
+    leaked = os.open(target, os.O_RDONLY)
+    assert ledger.imbalance == {leaked: 1}
+    os.close(leaked)

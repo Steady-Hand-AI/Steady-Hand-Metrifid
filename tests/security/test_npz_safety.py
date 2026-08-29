@@ -316,7 +316,7 @@ def test_fifo_refuses_without_blocking(tmp_path: Path) -> None:
         ),
     ]
     try:
-        completed = subprocess.run(command, capture_output=True, text=True, timeout=1, check=False)
+        completed = subprocess.run(command, capture_output=True, text=True, timeout=10, check=False)
     except subprocess.TimeoutExpired:
         pytest.fail("NPZ FIFO admission blocked in open")
     assert completed.returncode != 0

@@ -42,7 +42,7 @@ import mujoco
 from metrifid import _model_admission as admission
 from metrifid import _model_closure as closure
 from metrifid import _model_compile as model_compile
-from metrifid import _model_identity as identity
+from metrifid.compare._model_pair import open_live_model_pair
 from metrifid.json_values import thaw_canonical
 
 mode = sys.argv[1]
@@ -96,12 +96,14 @@ try:
         model_compile.mujoco.MjModel = SimpleNamespace(from_xml_path=forbidden)
     before = [address(mujoco.get_mju_user_malloc()), address(mujoco.get_mju_user_free())]
     try:
-        identity.build_model_pair_identity(
-            baseline,
-            "model.xml",
-            candidate,
-            "model.xml",
-        )
+        with open_live_model_pair(
+            baseline_root=baseline,
+            baseline_entrypoint="model.xml",
+            candidate_root=candidate,
+            candidate_entrypoint="model.xml",
+            aliases_json=None,
+        ):
+            pass
     except closure.ModelAdmissionRefusal as exc:
         result = {
             "outcome": "refused",

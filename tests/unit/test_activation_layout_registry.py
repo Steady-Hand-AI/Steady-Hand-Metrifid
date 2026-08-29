@@ -20,6 +20,7 @@ from metrifid import _model_identity_validation as validation
 from metrifid.json_values import CanonicalValue, compute_self_hash
 from metrifid.operational import OperationalReasonCode
 from metrifid.schemas import TargetReference
+from tests._support.model_identity import build_model_pair_identity
 
 SHA_A = "a" * 64
 SHA_B = "b" * 64
@@ -121,7 +122,7 @@ def _motor_pair(tmp_path: Path) -> identity.ModelPairIdentity:
         '<actuator><motor name="a" joint="j"/></actuator></mujoco>'
     )
     (tmp_path / "model.xml").write_text(xml, encoding="utf-8")
-    return identity.build_model_pair_identity(tmp_path, "model.xml", tmp_path, "model.xml")
+    return build_model_pair_identity(tmp_path, "model.xml", tmp_path, "model.xml")
 
 
 def test_registry_is_one_exact_immutable_source_of_truth() -> None:

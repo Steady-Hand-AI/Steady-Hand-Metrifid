@@ -47,7 +47,7 @@ from ..operational import OperationalReasonCode, OperationalToolObservation
 from ..schemas import ModelClosureIdentity
 from ..version import __version__
 from ._artifact import SerializedArtifact, serialize_complete_artifact
-from ._bytes import compare_artifact_bytes
+from ._bytes import compare_retained_artifacts
 from ._entrypoint import ResolvedEntrypoint, resolve_entrypoint
 from ._fields import build_field_report
 from ._markdown import render_markdown
@@ -105,15 +105,18 @@ def _certify(
     """Run both roles and retain output descriptors through the final decision checks."""
     scratch = Path(tempfile.mkdtemp(prefix="metrifid-certify-"))
     retained: RetainedArtifactPair | None = None
+    subjects: list[_RoleArtifact] = []
     succeeded = False
     try:
         with ExitStack() as stack:
+            stack.callback(_release_subjects, subjects)
             baseline_snapshot = stack.enter_context(
                 create_model_closure_snapshot(
                     baseline_target.model_root, baseline_target.entrypoint, "baseline"
                 )
             )
             baseline = _certify_role(baseline_snapshot, "baseline", scratch)
+            subjects.append(baseline)
             runtime = build_certify_runtime_identity(baseline.serialized.header_words)
             candidate_snapshot = stack.enter_context(
                 create_model_closure_snapshot(
@@ -121,9 +124,11 @@ def _certify(
                 )
             )
             candidate = _certify_role(candidate_snapshot, "candidate", scratch)
+            subjects.append(candidate)
             status, receipt = _certify_decision(tool, baseline, candidate, runtime)
             verify_model_closure_unchanged(baseline_snapshot, "baseline")
             verify_model_closure_unchanged(candidate_snapshot, "candidate")
+            _verify_subjects(subjects)
             retained = publish_paired_results(
                 published,
                 json_bytes=canonical_json_bytes(receipt) + b"\n",
@@ -131,6 +136,7 @@ def _certify(
             )
             verify_model_closure_unchanged(baseline_snapshot, "baseline")
             verify_model_closure_unchanged(candidate_snapshot, "candidate")
+            _verify_subjects(subjects)
         assert retained is not None
         verify_paired_results(published, retained)
         succeeded = True
@@ -143,6 +149,19 @@ def _certify(
         if succeeded:
             published.close()
         shutil.rmtree(scratch, ignore_errors=True)
+
+
+def _verify_subjects(subjects: list[_RoleArtifact]) -> None:
+    """Require every retained compiled subject to still hold its exact measured bytes."""
+    for artifact in subjects:
+        artifact.serialized.verify()
+
+
+def _release_subjects(subjects: list[_RoleArtifact]) -> None:
+    """Release every retained compiled descriptor exactly once, on success or on failure."""
+    for artifact in subjects:
+        artifact.serialized.retained.close()
+    subjects.clear()
 
 
 def _certify_role(snapshot: ModelClosureSnapshot, role: ModelRole, scratch: Path) -> _RoleArtifact:
@@ -164,7 +183,13 @@ def _certify_decision(
 ) -> tuple[CertifyStatus, dict[str, CanonicalValue]]:
     """Complete comparison evidence and receipt construction for two serialized roles."""
     _require_same_header(baseline, candidate)
-    comparison = compare_artifact_bytes(baseline.serialized.path, candidate.serialized.path)
+    baseline.serialized.verify()
+    candidate.serialized.verify()
+    comparison = compare_retained_artifacts(
+        baseline.serialized.retained, candidate.serialized.retained
+    )
+    baseline.serialized.verify()
+    candidate.serialized.verify()
     status = (
         CertifyStatus.CERTIFIED_COMPILED_EQUIVALENCE
         if comparison.equal
@@ -173,7 +198,9 @@ def _certify_decision(
     field_report = (
         None
         if comparison.equal
-        else build_field_report(baseline.serialized.path, candidate.serialized.path, comparison)
+        else build_field_report(
+            baseline.serialized.retained, candidate.serialized.retained, comparison
+        )
     )
     receipt = build_receipt(
         status=status,

@@ -9,6 +9,7 @@ import os
 import shutil
 import subprocess
 import sys
+import sysconfig
 from pathlib import Path
 from typing import Any
 
@@ -82,6 +83,43 @@ def _assert_refusal(result: dict[str, Any], expected: set[str]) -> None:
     assert result["reason"] in expected
     assert result["identity_state"] in {"UNBOUND", "MISMATCH"}
     assert result["distribution_sha256"] is None
+
+
+def _private_installed_copy(tmp_path: Path) -> tuple[Path, Path, dict[str, str]]:
+    """Copy the installed package and matching metadata into one private no-pip environment."""
+    distribution = metadata.distribution("metrifid")
+    files = tuple(distribution.files or ())
+    initializer = next(path for path in files if str(path) == "metrifid/__init__.py")
+    metadata_file = next(path for path in files if str(path).endswith(".dist-info/METADATA"))
+    installed_package = Path(distribution.locate_file(initializer)).resolve().parent
+    installed_dist_info = Path(distribution.locate_file(metadata_file)).resolve().parent
+
+    private_venv = tmp_path / "private-venv"
+    subprocess.run(
+        [sys.executable, "-m", "venv", "--without-pip", str(private_venv)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    private_python = private_venv / "bin" / "python"
+    purelib = subprocess.run(
+        [str(private_python), "-c", "import sysconfig; print(sysconfig.get_path('purelib'))"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    private_site = Path(purelib.stdout.strip()).resolve()
+    private_package = private_site / "metrifid"
+    shutil.copytree(installed_package, private_package)
+    shutil.copytree(installed_dist_info, private_site / installed_dist_info.name)
+    shutil.copy2(
+        Path(sysconfig.get_path("scripts")) / "metrifid",
+        private_venv / "bin" / "metrifid",
+    )
+    child_env = os.environ.copy()
+    child_env.pop("PYTHONHOME", None)
+    child_env.pop("PYTHONPATH", None)
+    return private_python, private_package, child_env
 
 
 def test_normal_installed_wheel_returns_trusted_hash(tmp_path: Path) -> None:
@@ -193,12 +231,13 @@ def test_loaded_module_absent_from_manifest_refuses(tmp_path: Path) -> None:
     This scenario exercises loaded module absent from manifest refuses; the assertions pin the
     user-visible result and the evidence needed to explain that result.
     """
-    distribution = metadata.distribution("metrifid")
-    initializer = next(
-        path for path in distribution.files or () if str(path) == "metrifid/__init__.py"
-    )
-    package_root = Path(str(distribution.locate_file(initializer))).resolve().parent
-    extra = package_root / "runtime_only_attack.py"
+    real_digest = installed_distribution_sha256()
+    private_python, private_package, child_env = _private_installed_copy(tmp_path)
+    assert _run_json(private_python, _REFUSAL_CODE, tmp_path, env=child_env) == {
+        "distribution_sha256": real_digest,
+        "outcome": "TRUSTED",
+    }
+    extra = private_package / "runtime_only_attack.py"
     extra.write_text("VALUE = 1\n", encoding="utf-8")
     code = (
         "import sys; from types import SimpleNamespace; import metrifid; "
@@ -206,10 +245,11 @@ def test_loaded_module_absent_from_manifest_refuses(tmp_path: Path) -> None:
         + _REFUSAL_CODE
     )
     try:
-        result = _run_json(Path(sys.executable), code, tmp_path, env=os.environ.copy())
+        result = _run_json(private_python, code, tmp_path, env=child_env)
     finally:
         extra.unlink(missing_ok=True)
     _assert_refusal(result, {"DISTRIBUTION_MANIFEST_INVALID"})
+    assert installed_distribution_sha256() == real_digest
 
 
 def test_loaded_module_bytes_changed_after_install_refuses(tmp_path: Path) -> None:
@@ -218,6 +258,13 @@ def test_loaded_module_bytes_changed_after_install_refuses(tmp_path: Path) -> No
     This scenario exercises loaded module bytes changed after install refuses; the assertions
     pin the user-visible result and the evidence needed to explain that result.
     """
+    real_digest = installed_distribution_sha256()
+    private_python, _, child_env = _private_installed_copy(tmp_path)
+    assert _run_json(private_python, _REFUSAL_CODE, tmp_path, env=child_env) == {
+        "distribution_sha256": real_digest,
+        "outcome": "TRUSTED",
+    }
+
     code = r"""
 import json
 from pathlib import Path
@@ -243,9 +290,9 @@ finally:
     target.write_bytes(original)
 print(json.dumps(result, sort_keys=True))
 """
-    result = _run_json(Path(sys.executable), code, tmp_path, env=os.environ.copy())
+    result = _run_json(private_python, code, tmp_path, env=child_env)
     _assert_refusal(result, {"DISTRIBUTION_MANIFEST_INVALID"})
-    assert installed_distribution_sha256()
+    assert installed_distribution_sha256() == real_digest
 
 
 _PAYLOAD_FILENAME = "project_payload.zip"

@@ -19,11 +19,12 @@ _OPERATIONAL_FAILURE_SCHEMA_VERSION = 1
 _OPERATIONAL_RULE_SCHEMA = "metrifid.operational_failure_rules"
 _OPERATIONAL_RULE_SCHEMA_VERSION = 1
 
-# The exact installed operations that may own an operational failure. A candidate
-# failure raised by the accepted comparison engine stays "compare"; only audit-level
-# invocation, configuration, generation, output, or internal failures are
-# "audit-timestep".
-_OPERATIONS: frozenset[str] = frozenset({"compare", "audit-timestep", "certify"})
+# The exact installed operations that may own an operational failure. Every refusal names the
+# command-level contract that actually failed; nested comparison failures retain "compare" where
+# the audit contract explicitly preserves them as candidate evidence.
+_OPERATIONS: frozenset[str] = frozenset(
+    {"compare", "audit-timestep", "certify", "review-model", "qualify-workload"}
+)
 
 
 class OperationalStage(StrEnum):
@@ -126,6 +127,9 @@ class OperationalReasonCode(StrEnum):
     # Certify-only reasons. Appended at the end so no preexisting member is renumbered.
     COMPILED_ARTIFACT_INVALID = "COMPILED_ARTIFACT_INVALID"
     COMPILED_ARTIFACT_SIZE_EXCEEDED = "COMPILED_ARTIFACT_SIZE_EXCEEDED"
+    # Rolling-runtime reasons. Appended so every accepted registry binding stays unchanged.
+    MUJOCO_RUNTIME_CAPABILITY_MISSING = "MUJOCO_RUNTIME_CAPABILITY_MISSING"
+    MUJOCO_FEATURE_COVERAGE_INCOMPLETE = "MUJOCO_FEATURE_COVERAGE_INCOMPLETE"
 
     @property
     def stage(self) -> OperationalStage:
@@ -233,6 +237,8 @@ _REASON_STAGE: Mapping[OperationalReasonCode, OperationalStage] = MappingProxyTy
         OperationalReasonCode.CONTROL_INTERVAL_COUNT_INVALID: OperationalStage.TIME_CONTRACT,
         OperationalReasonCode.COMPILED_ARTIFACT_INVALID: OperationalStage.MODEL_COMPILE,
         OperationalReasonCode.COMPILED_ARTIFACT_SIZE_EXCEEDED: OperationalStage.MODEL_COMPILE,
+        OperationalReasonCode.MUJOCO_RUNTIME_CAPABILITY_MISSING: OperationalStage.ENVIRONMENT,
+        OperationalReasonCode.MUJOCO_FEATURE_COVERAGE_INCOMPLETE: OperationalStage.SEMANTIC_IDENTITY,
         OperationalReasonCode.MONITORED_JOINT_SET_EMPTY: OperationalStage.TOLERANCE_CONTRACT,
         OperationalReasonCode.TOLERANCE_MISSING: OperationalStage.TOLERANCE_CONTRACT,
         OperationalReasonCode.TOLERANCE_FIELD_INVALID: OperationalStage.TOLERANCE_CONTRACT,

@@ -24,6 +24,7 @@ from metrifid._model_dependencies import (
     discover_snapshot_dependencies as _discover,
 )
 from metrifid.operational import OperationalReasonCode
+from tests._support.model_identity import build_model_pair_identity
 
 
 def _create_model_root(tmp_path: Path) -> Path:
@@ -333,8 +334,6 @@ def test_external_include_changes_dynamics_but_product_refuses_before_identity(
     """
     import mujoco
 
-    from metrifid import _model_identity as identity
-
     external = tmp_path / "external.xml"
     root = tmp_path / "root"
     root.mkdir()
@@ -359,13 +358,13 @@ def test_external_include_changes_dynamics_but_product_refuses_before_identity(
     write_external("0.1")
     first = mujoco.MjModel.from_xml_path(str(root / "model.xml"))
     with pytest.raises(closure.ModelAdmissionRefusal) as first_refusal:
-        identity.build_model_pair_identity(root.resolve(), "model.xml", root.resolve(), "model.xml")
+        build_model_pair_identity(root.resolve(), "model.xml", root.resolve(), "model.xml")
     assert _refusal_reason(first_refusal) is OperationalReasonCode.MODEL_CLOSURE_PATH_ESCAPE
 
     write_external("9.0")
     second = mujoco.MjModel.from_xml_path(str(root / "model.xml"))
     with pytest.raises(closure.ModelAdmissionRefusal) as second_refusal:
-        identity.build_model_pair_identity(root.resolve(), "model.xml", root.resolve(), "model.xml")
+        build_model_pair_identity(root.resolve(), "model.xml", root.resolve(), "model.xml")
     assert _refusal_reason(second_refusal) is OperationalReasonCode.MODEL_CLOSURE_PATH_ESCAPE
     assert float(first.dof_damping[0]) == pytest.approx(0.1)
     assert float(second.dof_damping[0]) == pytest.approx(9.0)
@@ -379,8 +378,6 @@ def test_external_mesh_and_compiler_directories_refuse(tmp_path: Path, mode: str
     This scenario exercises external mesh and compiler directories refuse; the assertions bind
     admission to exact model bytes, resource boundaries, or an explicit refusal reason.
     """
-    from metrifid import _model_identity as identity
-
     outside = tmp_path / "outside"
     outside.mkdir()
     (outside / "mesh.obj").write_text(OBJ, encoding="ascii")
@@ -399,7 +396,7 @@ def test_external_mesh_and_compiler_directories_refuse(tmp_path: Path, mode: str
         encoding="utf-8",
     )
     with pytest.raises(closure.ModelAdmissionRefusal) as exc:
-        identity.build_model_pair_identity(root.resolve(), "model.xml", root.resolve(), "model.xml")
+        build_model_pair_identity(root.resolve(), "model.xml", root.resolve(), "model.xml")
     assert _refusal_reason(exc) is OperationalReasonCode.MODEL_CLOSURE_PATH_ESCAPE
 
 
@@ -409,8 +406,6 @@ def test_relative_include_escape_never_returns_pair_identity(tmp_path: Path) -> 
     This scenario exercises relative include escape never returns pair identity; the assertions
     bind admission to exact model bytes, resource boundaries, or an explicit refusal reason.
     """
-    from metrifid import _model_identity as identity
-
     root = tmp_path / "root"
     root.mkdir()
     (tmp_path / "outside.xml").write_text("<mujoco/>", encoding="utf-8")
@@ -418,7 +413,7 @@ def test_relative_include_escape_never_returns_pair_identity(tmp_path: Path) -> 
         '<mujoco><include file="../outside.xml"/></mujoco>', encoding="utf-8"
     )
     with pytest.raises(closure.ModelAdmissionRefusal) as exc:
-        identity.build_model_pair_identity(root.resolve(), "model.xml", root.resolve(), "model.xml")
+        build_model_pair_identity(root.resolve(), "model.xml", root.resolve(), "model.xml")
     assert _refusal_reason(exc) in {
         OperationalReasonCode.MODEL_CLOSURE_PATH_ESCAPE,
         OperationalReasonCode.BASELINE_MODEL_COMPILE_ERROR,

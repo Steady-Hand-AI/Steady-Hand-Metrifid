@@ -4,9 +4,13 @@ from __future__ import annotations
 
 import importlib.metadata
 import importlib.resources
+import json
+import os
 import subprocess
 import sys
 from pathlib import Path
+
+import pytest_check as check
 
 import metrifid
 from metrifid.version import __version__ as CURRENT_VERSION
@@ -166,7 +170,7 @@ def test_the_installed_commands_and_runtime_dependencies_are_declared() -> None:
         for requirement in (distribution.requires or [])
         if "extra ==" not in requirement
     }
-    assert runtime == {("mujoco", ("==3.10.0.*",)), ("numpy", (">=1.26",))}
+    assert runtime == {("mujoco", (">=3.9",)), ("numpy", (">=1.26",))}
 
 
 def test_the_declared_python_support_has_no_upper_bound() -> None:
@@ -182,7 +186,7 @@ def test_the_declared_python_support_has_no_upper_bound() -> None:
 
 
 def test_no_runtime_dependency_declares_an_upper_bound() -> None:
-    """Keep every runtime dependency free of a ceiling except the exact MuJoCo engine family."""
+    """Keep every runtime dependency on a minimum-only specifier with no ceiling."""
     import importlib.metadata as metadata
 
     for requirement in metadata.distribution("metrifid").requires or []:
@@ -190,10 +194,7 @@ def test_no_runtime_dependency_declares_an_upper_bound() -> None:
             continue
         name, specifiers = _normalize_requirement(requirement)
         for specifier in specifiers:
-            if name == "mujoco":
-                assert specifier == "==3.10.0.*"
-            else:
-                assert specifier.startswith(">="), (name, specifier)
+            assert specifier.startswith(">="), (name, specifier)
 
 
 def test_the_development_extra_declares_no_ceiling_and_no_numpy() -> None:
@@ -224,3 +225,231 @@ def test_the_public_workload_writers_remain_importable() -> None:
     assert callable(write_state_artifact)
     assert callable(write_actions_artifact)
     assert {"write_state_artifact", "write_actions_artifact"} <= set(metrifid.__all__)
+
+
+# --- Workload Qualification supported submodule surface ----------------------------------------
+#
+# `metrifid.workload_qualification.__all__` is a compatibility commitment, so it is pinned exactly
+# rather than by subset. Everything here runs against the installed distribution.
+
+WORKLOAD_QUALIFICATION_PUBLIC = [
+    "QualificationExitCode",
+    "QualificationResult",
+    "QualificationStatus",
+    "WorkloadQualificationOperationError",
+    "load_and_validate_workload_qualification_receipt",
+    "qualify_configuration_file",
+]
+
+WORKLOAD_QUALIFICATION_WITHDRAWN = (
+    "CellOutcome",
+    "MAX_PROBE_GROUPS",
+    "MAX_SUBSETS",
+    "MAX_VARIANTS",
+    "MAX_WORKLOADS",
+    "MIN_PROBE_GROUPS",
+    "MIN_VARIANTS",
+    "MIN_WORKLOADS",
+    "ProbeGroup",
+    "ProbeGroupStatus",
+    "ProbeVariant",
+    "QUALIFICATION_LIMITATIONS",
+    "QualificationConfig",
+    "QualificationLimitationCode",
+    "REQUIRED_BUDGET",
+    "WorkloadCandidate",
+    "planned_comparisons",
+    "qualification_exit_code",
+    "validate_qualification_receipt",
+)
+
+
+def test_the_workload_qualification_surface_is_exactly_the_six_supported_names() -> None:
+    """Pin the supported submodule surface exactly, in its declared order."""
+    import metrifid.workload_qualification as qualification
+
+    check.equal(
+        list(qualification.__all__),
+        WORKLOAD_QUALIFICATION_PUBLIC,
+        "the workload_qualification __all__ is not the exact frozen six-name list",
+    )
+    for name in WORKLOAD_QUALIFICATION_PUBLIC:
+        check.is_true(
+            hasattr(qualification, name),
+            f"the supported name {name!r} does not resolve on the installed package",
+        )
+
+
+def test_a_star_import_exposes_exactly_the_supported_names() -> None:
+    """`from ... import *` must bind the six supported names and nothing else."""
+    namespace: dict[str, object] = {}
+    exec("from metrifid.workload_qualification import *", namespace)
+    bound = sorted(name for name in namespace if not name.startswith("__"))
+    check.equal(
+        bound,
+        sorted(WORKLOAD_QUALIFICATION_PUBLIC),
+        "a star import bound a different set of names than the supported surface",
+    )
+
+
+def test_the_withdrawn_names_are_not_public_attributes() -> None:
+    """Names withdrawn from the public surface must not resolve on the package."""
+    import metrifid.workload_qualification as qualification
+
+    for name in WORKLOAD_QUALIFICATION_WITHDRAWN:
+        check.is_false(
+            hasattr(qualification, name),
+            f"{name!r} is still reachable as a public attribute after being withdrawn",
+        )
+        check.is_not_in(
+            name,
+            qualification.__all__,
+            f"{name!r} is still advertised in __all__ after being withdrawn",
+        )
+
+
+def test_importing_the_submodule_has_no_native_or_filesystem_side_effect(tmp_path: Path) -> None:
+    """Importing the package must not load MuJoCo or perform filesystem or network work.
+
+    A child process installs an audit hook before the import and records the events that would mean
+    real work: opening a file for writing, creating or removing a path, or touching a socket.
+    Reading the module's own source is what the import system does for every module and is not
+    counted. This observes the real import rather than trusting the module source.
+    """
+    probe = tmp_path / "probe.py"
+    probe.write_text(
+        "import json, sys\n"
+        "side_effects = []\n"
+        "_MUTATING = (\n"
+        "    'os.mkdir', 'os.rmdir', 'os.remove', 'os.rename', 'os.symlink', 'os.link',\n"
+        "    'os.truncate', 'shutil.copyfile', 'shutil.move', 'tempfile.mkstemp',\n"
+        ")\n"
+        "def _hook(name, args):\n"
+        "    if name == 'open':\n"
+        "        mode = args[1] if len(args) > 1 else None\n"
+        "        if isinstance(mode, str) and any(flag in mode for flag in 'wxa+'):\n"
+        "            side_effects.append([name, str(args[0])])\n"
+        "    elif name in _MUTATING or name.startswith('socket.'):\n"
+        "        side_effects.append([name, str(args[0]) if args else ''])\n"
+        "sys.addaudithook(_hook)\n"
+        "before = set(sys.modules)\n"
+        "import metrifid.workload_qualification as q\n"
+        "after = set(sys.modules)\n"
+        "print(json.dumps({\n"
+        "    'mujoco': any(m == 'mujoco' or m.startswith('mujoco.') for m in after),\n"
+        "    'numpy': any(m == 'numpy' or m.startswith('numpy.') for m in after - before),\n"
+        "    'side_effects': side_effects[:20],\n"
+        "    'names': list(q.__all__),\n"
+        "}))\n",
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        [sys.executable, str(probe)],
+        check=False,
+        capture_output=True,
+        text=True,
+        cwd=tmp_path,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    observed = json.loads(result.stdout)
+    check.is_false(observed["mujoco"], "importing the submodule eagerly imported MuJoCo")
+    check.is_false(observed["numpy"], "importing the submodule eagerly imported NumPy")
+    check.equal(
+        observed["side_effects"],
+        [],
+        f"importing the submodule performed filesystem or network work: {observed['side_effects']}",
+    )
+    check.equal(
+        observed["names"],
+        WORKLOAD_QUALIFICATION_PUBLIC,
+        "the child process observed a different supported surface",
+    )
+
+
+def test_a_separate_strict_mypy_consumer_uses_all_six_supported_names(tmp_path: Path) -> None:
+    """A consumer outside the repository, without PYTHONPATH, type-checks against the wheel."""
+    consumer = tmp_path / "consumer.py"
+    consumer.write_text(
+        "from pathlib import Path\n"
+        "from metrifid.workload_qualification import (\n"
+        "    QualificationExitCode,\n"
+        "    QualificationResult,\n"
+        "    QualificationStatus,\n"
+        "    WorkloadQualificationOperationError,\n"
+        "    load_and_validate_workload_qualification_receipt,\n"
+        "    qualify_configuration_file,\n"
+        ")\n"
+        "\n"
+        "def run(configuration: Path) -> tuple[QualificationStatus, int]:\n"
+        '    """Run one campaign and return its completed status and exit code."""\n'
+        "    try:\n"
+        "        result: QualificationResult = qualify_configuration_file(configuration)\n"
+        "    except WorkloadQualificationOperationError:\n"
+        "        return QualificationStatus.UNRESOLVED, int(QualificationExitCode.UNRESOLVED)\n"
+        "    return result.status, result.exit_code\n"
+        "\n"
+        "def reload(receipt: Path) -> str:\n"
+        '    """Validate one published receipt and return its recorded status."""\n'
+        "    document = load_and_validate_workload_qualification_receipt(receipt)\n"
+        "    return str(document['status'])\n",
+        encoding="utf-8",
+    )
+    environment = dict(os.environ)
+    environment.pop("PYTHONPATH", None)
+    result = subprocess.run(
+        [sys.executable, "-m", "mypy", "--strict", str(consumer)],
+        check=False,
+        capture_output=True,
+        text=True,
+        cwd=tmp_path,
+        env=environment,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_a_result_reports_the_exit_code_its_registry_declares_for_every_status() -> None:
+    """A real result's `exit_code` must agree with the registry, for every completed status.
+
+    Comparing the two registries to each other proves nothing: they would move together. What has to
+    hold is that the value `QualificationResult.exit_code` actually returns is the one
+    `QualificationExitCode` declares for that result's status, so a real result object is built for
+    each status and its property is read.
+    """
+    from metrifid.workload_qualification import (
+        QualificationExitCode,
+        QualificationResult,
+        QualificationStatus,
+    )
+
+    statuses = list(QualificationStatus)
+    assert statuses, "the status registry is empty, so there is nothing to check"
+
+    for status in statuses:
+        check.is_true(
+            hasattr(QualificationExitCode, status.name),
+            f"the exit-code registry has no member for status {status.name}",
+        )
+        declared = int(getattr(QualificationExitCode, status.name))
+        result = QualificationResult(
+            status=status,
+            receipt={},
+            receipt_sha256="0" * 64,
+            qualification_json=Path("workload_qualification.json"),
+            qualification_markdown=Path("workload_qualification.md"),
+        )
+        check.equal(
+            result.exit_code,
+            declared,
+            f"a result whose status is {status.name} reports exit code {result.exit_code}, but "
+            f"QualificationExitCode declares {declared}",
+        )
+        check.is_(
+            result.status,
+            status,
+            f"a result built with status {status.name} did not report that status back",
+        )
+        check.is_in(
+            declared,
+            (0, 20, 30),
+            f"status {status.name} maps to an exit code outside the frozen set",
+        )

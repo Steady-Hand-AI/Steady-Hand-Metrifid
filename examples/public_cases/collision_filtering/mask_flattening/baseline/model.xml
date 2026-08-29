@@ -1,0 +1,13 @@
+<mujoco model="collision-mask-flattening">
+  <worldbody>
+    <body name="selective_a_body" pos="-0.4 0 0">
+      <geom name="selective_a" type="sphere" size="0.1" mass="1" contype="1" conaffinity="2"/>
+    </body>
+    <body name="selective_b_body" pos="0 0 0">
+      <geom name="selective_b" type="sphere" size="0.1" mass="1" contype="2" conaffinity="1"/>
+    </body>
+    <body name="isolated_c_body" pos="0.4 0 0">
+      <geom name="isolated_c" type="sphere" size="0.1" mass="1" contype="4" conaffinity="4"/>
+    </body>
+  </worldbody>
+</mujoco>

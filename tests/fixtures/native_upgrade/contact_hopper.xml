@@ -1,0 +1,32 @@
+<mujoco model="native_upgrade_contact_hopper">
+  <compiler angle="radian"/>
+  <option timestep="0.004" gravity="0 0 -9.81" integrator="Euler" iterations="100" tolerance="1e-10"/>
+  <default>
+    <joint armature="0.01" damping="0.08"/>
+    <geom density="600" friction="0.8 0.02 0.001" solref="0.1 2"/>
+  </default>
+  <worldbody>
+    <geom name="ground" type="plane" size="3 3 0.1" density="0"/>
+    <body name="hopper_root" pos="0 0 0.75">
+      <freejoint name="root_free"/>
+      <geom name="torso_geom" type="capsule" fromto="0 0 0 0 0 -0.18" size="0.08" contype="0" conaffinity="0"/>
+      <body name="upper_leg" pos="0 0 -0.18">
+        <joint name="hip" type="hinge" axis="0 1 0" range="-1.2 1.2" limited="true"/>
+        <geom name="upper_leg_geom" type="capsule" fromto="0 0 0 0 0 -0.25" size="0.045" contype="0" conaffinity="0"/>
+        <body name="lower_leg" pos="0 0 -0.25">
+          <joint name="knee" type="hinge" axis="0 1 0" range="-1.5 0.5" limited="true"/>
+          <geom name="lower_leg_geom" type="capsule" fromto="0 0 0 0 0 -0.22" size="0.04" contype="0" conaffinity="0"/>
+          <geom name="foot" type="sphere" pos="0 0 -0.25" size="0.07" mass="0.3"/>
+        </body>
+      </body>
+    </body>
+  </worldbody>
+  <actuator>
+    <motor name="hip_drive" joint="hip" gear="2" ctrllimited="true" ctrlrange="-1 1"/>
+    <motor name="knee_drive" joint="knee" gear="2" ctrllimited="true" ctrlrange="-1 1"/>
+  </actuator>
+  <sensor>
+    <jointpos name="hip_position" joint="hip"/>
+    <jointpos name="knee_position" joint="knee"/>
+  </sensor>
+</mujoco>

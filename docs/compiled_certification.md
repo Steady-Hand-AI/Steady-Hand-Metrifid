@@ -31,18 +31,28 @@ There is no separate, narrower Certify envelope.
 Python           3.11 or newer; no upper bound; implementation name is not a runtime rejection
 operating system POSIX reporting Linux or Darwin, with the required POSIX capabilities present
 architecture     never rejected; the machine string is receipt evidence only
-MuJoCo engine    native 3.10.0 / 3010000 exactly
-MuJoCo package   the stable 3.10.0 family, including binding-only 3.10.0.postN
+MuJoCo package   stable >=3.9, with no minor ceiling
+MuJoCo identity  package/native three-part base and native integer agree exactly
+validated exact  3.9.0, 3.10.0, 3.11.0, and 3.12.0
 NumPy            >=1.26, no runtime upper bound
 ```
 
+The newest stable MuJoCo is the primary development and release profile—3.12.0 for the frozen
+2026-08-22 snapshot. Exact 3.9.0 is the minimum profile; retained 3.10.0 and 3.11.0 results provide
+backward-compatibility evidence. Compilation always uses and records the exact admitted runtime.
+
 The package metadata has no artificial Python upper bound and the runtime does not reject an
 implementation by name. Release evidence currently uses CPython because the MuJoCo binary wheels
-exercised by the release matrix target CPython. CI is configured for CPython 3.11–3.14 on Linux
-x86_64, CPython 3.12 and 3.14 on macOS arm64, and CPython 3.12 on macOS x86_64. A tuple is
+exercised by the release matrix target CPython. The interpreters and platforms CI exercises change
+as upstream support does; the matrix in `.github/workflows/ci.yml` is the authority. A tuple is
 described as validated only after that exact lane passes. Native Windows is unsupported because the
 required POSIX capabilities are absent; WSL is the documented route. Anything the gate refuses is
 reported through the environment reason codes, which name the measured fact that failed.
+
+`certify` measures only the compiled-artifact capability surface. A later coherent stable MuJoCo
+release can therefore be capability-admitted without being mislabeled validated, even when its
+typed `review-model` public-field surface has not yet been characterized. The certificate remains
+bound to the exact package, native library, distribution, platform, and MJB identities it observed.
 
 Release evidence is produced from a noneditable wheel, never from the source tree.
 
@@ -85,7 +95,7 @@ mjb_size_bytes            equal to mj_sizeModel
 header_words              the five native C integers MuJoCo wrote
 magic_decimal/magic_hex   54321 / 0x0000d431
 sizeof_mjtNum             the active build's mjtNum width
-mujoco_version_integer    3010000
+mujoco_version_integer    exact active-runtime mj_version() value
 runtime_identity_sha256   the recorded runtime this artifact came from
 ```
 
@@ -158,3 +168,9 @@ Repeated identical invocations in the same environment publish byte-identical JS
 ## Resource behavior
 
 The two roles are processed strictly sequentially while both lightweight source snapshots remain alive through the decision. Real Menagerie artifacts measured 70.9–119.8 MB in earlier work, so a role's compiled model and its serialized buffer are released before the next role compiles, artifact bytes live in private mode-`0600` files rather than in memory, and the comparison streams fixed-size chunks and accumulates counters instead of collecting differing offsets. Every private file and scratch directory is removed on success and on failure.
+
+## Compiled-artifact confinement
+
+A private artifact's directory entry is removed as soon as its bytes are written, fsynced and measured, so the compiled subject survives only as an open descriptor with no pathname. The byte comparison reads it positionally through that descriptor, and MuJoCo reaches it through the operating system's own descriptor path (`/proc/self/fd` on Linux, `/dev/fd` on Linux and macOS), each admitted only after it is proven to name the exact retained object. A completed decision binds the digest of the exact loaded MjModel serialization and the exact byte streams consumed by complete-MJB comparison. Loading reserializes the exact loaded model and requires its digest to match; the comparison hashes each consumed stream, including the non-overlap tail, and requires both to match. Checking the retained bytes around a consumer would not establish this, because a same-user process can mutate the object between two checks and restore it.
+
+This exists so that every fact in a receipt describes the artifact whose digest that receipt publishes, even when another process running as the same operating-system user can create, rename and replace entries in the temporary directory. Substituting a different object is prevented outright, because no name survives to redirect. Mutating the retained object in place is detected rather than prevented — on Linux a same-user process can still reach it through `/proc/<pid>/fd` — and the reverification makes such a run fail closed instead of completing. It is not a defense against a privileged kernel compromise or against mutation of this process's memory. Reading through the descriptor does not change the resource behavior above: nothing additional becomes resident.

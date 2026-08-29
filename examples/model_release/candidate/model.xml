@@ -1,0 +1,26 @@
+<mujoco model="model-release-example">
+  <option timestep="0.002"/>
+
+  <worldbody>
+    <body name="arm_link" pos="0 0 0.25">
+      <joint
+        name="arm_hinge"
+        type="hinge"
+        axis="0 1 0"
+        limited="true"
+        range="-45 45"
+      />
+      <geom
+        name="arm_geom"
+        type="capsule"
+        fromto="0 0 0 0 0 0.4"
+        size="0.04"
+        mass="1.25"
+      />
+    </body>
+  </worldbody>
+
+  <actuator>
+    <motor name="arm_motor" joint="arm_hinge" gear="1"/>
+  </actuator>
+</mujoco>

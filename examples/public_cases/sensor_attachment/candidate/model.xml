@@ -1,0 +1,15 @@
+<mujoco model="sensor-site-attachment-change">
+  <option gravity="0 0 0"/>
+  <worldbody>
+    <body name="tool_body">
+      <freejoint name="tool_free"/>
+      <geom name="tool_geom" type="box" size="0.05 0.05 0.1" mass="1"/>
+      <site name="sensor_frame" pos="0 0 0" size="0.005"/>
+      <site name="grip_frame" pos="0 0 0.1" size="0.005"/>
+    </body>
+  </worldbody>
+  <sensor>
+    <force name="tool_force" site="grip_frame"/>
+    <torque name="tool_torque" site="grip_frame"/>
+  </sensor>
+</mujoco>

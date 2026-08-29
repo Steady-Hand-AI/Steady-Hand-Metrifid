@@ -1,0 +1,12 @@
+<mujoco model="actuator-transmission-frame-change">
+  <option gravity="0 0 0"/>
+  <worldbody>
+    <body name="rotor_body">
+      <joint name="rotor_joint" type="ball"/>
+      <geom name="rotor_geom" type="box" size="0.1 0.2 0.3" mass="1"/>
+    </body>
+  </worldbody>
+  <actuator>
+    <motor name="drive" joint="rotor_joint" gear="0 0 1 0 0 0"/>
+  </actuator>
+</mujoco>

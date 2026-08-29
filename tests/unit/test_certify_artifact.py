@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import struct
 from pathlib import Path
 
-import mujoco
+import mujoco  # type: ignore[import-untyped]
 import numpy as np
 import pytest
 
@@ -55,7 +56,8 @@ def test_the_digest_covers_every_serialized_byte(tmp_path: Path) -> None:
     complete_mjb = buffer.tobytes()
     assert artifact.mjb_size_bytes == size == len(complete_mjb)
     assert artifact.mjb_sha256 == hashlib.sha256(complete_mjb).hexdigest()
-    assert artifact.path.read_bytes() == complete_mjb
+    assert artifact.retained.read_exact(0, artifact.mjb_size_bytes) == complete_mjb
+    assert artifact.retained.measured_digest() == artifact.mjb_sha256
 
 
 def test_the_written_file_is_private_and_matches_the_recorded_identity(tmp_path: Path) -> None:
@@ -65,9 +67,15 @@ def test_the_written_file_is_private_and_matches_the_recorded_identity(tmp_path:
     assertions pin the user-visible result and the evidence needed to explain that result.
     """
     artifact = serialize_complete_artifact(_compile_test_model(), "candidate", tmp_path)
+    # The artifact is private for the moment it exists as a name, and nameless afterwards, so
+    # no same-user process is left a directory entry it could redirect at other bytes.
     assert artifact.path.name == "candidate.mjb"
-    assert artifact.path.stat().st_mode & 0o777 == 0o600
-    assert artifact.path.stat().st_size == artifact.mjb_size_bytes
+    assert not artifact.path.exists()
+    assert list(tmp_path.iterdir()) == []
+    descriptor = os.fstat(artifact.retained.fd)
+    assert descriptor.st_nlink == 0
+    assert descriptor.st_mode & 0o777 == 0o600
+    assert descriptor.st_size == artifact.mjb_size_bytes
     identity = artifact.identity(_RUNTIME_DIGEST)
     assert identity.schema == ARTIFACT_IDENTITY_SCHEMA
     assert identity.schema_version == 1
@@ -85,12 +93,14 @@ def test_the_header_is_five_native_words_with_the_documented_meanings(tmp_path: 
     assert len(artifact.header_words) == 5
     assert artifact.header_words[0] == 54321
     assert artifact.header_words[1] == artifact.sizeof_mjtnum == 8
-    assert artifact.header_words[3] == mujoco.mj_version() == 3010000
-    assert read_header_words(artifact.path, "baseline") == artifact.header_words
+    native_version_integer = mujoco.mj_version()
+    assert artifact.header_words[3] == native_version_integer
+    header_source = Path(artifact.retained.descriptor_path())
+    assert read_header_words(header_source, "baseline") == artifact.header_words
     identity = artifact.identity(_RUNTIME_DIGEST)
     assert identity.magic_decimal == 54321
     assert identity.magic_hex == "0x0000d431"
-    assert identity.mujoco_version_integer == 3010000
+    assert identity.mujoco_version_integer == native_version_integer
 
 
 def test_the_header_words_are_a_build_property_not_a_model_property(tmp_path: Path) -> None:
@@ -152,14 +162,14 @@ def test_the_size_bound_is_exclusive_at_exactly_the_limit(
     [
         (0, 12345, "magic_word_mismatch"),
         (1, 4, "mjtnum_width_mismatch"),
-        (3, 3009000, "version_word_mismatch"),
+        pytest.param(3, None, "version_word_mismatch", id="runtime-version-word-mismatch"),
     ],
 )
 def test_a_corrupt_header_word_refuses_as_an_invalid_artifact(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     word_index: int,
-    replacement: int,
+    replacement: int | None,
     issue: str,
 ) -> None:
     """Protect the certification artifact assurance boundary from behavioral drift.
@@ -176,7 +186,8 @@ def test_a_corrupt_header_word_refuses_as_an_invalid_artifact(
         without bypassing the contract boundary under assertion.
         """
         real_save(model, filename, buffer)
-        struct.pack_into("=i", buffer, word_index * 4, replacement)
+        changed_word = int(mujoco.mj_version()) + 1 if replacement is None else replacement
+        struct.pack_into("=i", buffer.data, word_index * 4, changed_word)
 
     monkeypatch.setattr(mujoco, "mj_saveModel", corrupt)
     with pytest.raises(ModelAdmissionRefusal) as caught:
@@ -285,3 +296,98 @@ def test_differences_are_counted_across_chunk_boundaries(tmp_path: Path) -> None
     result = compare_artifact_bytes(left, right)
     assert result.first_differing_byte_offset == 10
     assert result.differing_byte_count == 4
+
+
+def test_a_transient_retained_model_load_is_retried_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Retry the observed transient descriptor-path MJB open without rerunning the decision."""
+    artifact = serialize_complete_artifact(_compile_test_model(), "baseline", tmp_path)
+    real_loader = artifact_module._load_model_from_binary_path
+    attempts = 0
+
+    def flaky_loader(path: str) -> mujoco.MjModel:
+        """Fail exactly once with the observed MuJoCo error, then load the same retained bytes."""
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise ValueError("mj_loadModel: failed to load from mjb")
+        return real_loader(path)
+
+    monkeypatch.setattr(artifact_module, "_load_model_from_binary_path", flaky_loader)
+    loaded = artifact_module.load_subject_model(artifact.retained)
+    assert attempts == 2
+    artifact_module._require_loaded_model_matches_subject(loaded, artifact.retained)
+
+
+def test_a_retried_retained_model_load_reverifies_the_subject(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Re-verify the retained subject between attempts instead of trusting the first check.
+
+    The retry exists because one descriptor open lost a race, not because the artifact is assumed
+    intact. Without this the retry could reuse a subject whose bytes changed between attempts, and
+    nothing else in the bounded-retry contract would notice.
+    """
+    artifact = serialize_complete_artifact(_compile_test_model(), "baseline", tmp_path)
+    real_loader = artifact_module._load_model_from_binary_path
+    real_verify = artifact_module.RetainedCompiledArtifact.verify
+    attempts = 0
+    verifications: list[int] = []
+
+    def counting_verify(self: artifact_module.RetainedCompiledArtifact) -> None:
+        """Record how many load attempts had been made when each verification ran."""
+        verifications.append(attempts)
+        real_verify(self)
+
+    def flaky_loader(path: str) -> mujoco.MjModel:
+        """Fail exactly once with the observed MuJoCo error, then load the same retained bytes."""
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise ValueError("mj_loadModel: failed to load from mjb")
+        return real_loader(path)
+
+    monkeypatch.setattr(artifact_module.RetainedCompiledArtifact, "verify", counting_verify)
+    monkeypatch.setattr(artifact_module, "_load_model_from_binary_path", flaky_loader)
+    artifact_module.load_subject_model(artifact.retained)
+    assert attempts == 2
+    assert verifications == [0, 1, 2]
+
+
+def test_a_persistent_retained_model_load_failure_stops_after_one_retry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A persistent MJB-open failure remains a hard failure after exactly two attempts."""
+    artifact = serialize_complete_artifact(_compile_test_model(), "baseline", tmp_path)
+    attempts = 0
+
+    def broken_loader(_path: str) -> mujoco.MjModel:
+        """Return the same retryable failure on every bounded attempt."""
+        nonlocal attempts
+        attempts += 1
+        raise ValueError("mj_loadModel: failed to load from mjb")
+
+    monkeypatch.setattr(artifact_module, "_load_model_from_binary_path", broken_loader)
+    with pytest.raises(ValueError, match="failed to load from mjb"):
+        artifact_module.load_subject_model(artifact.retained)
+    assert attempts == 2
+
+
+def test_a_nontransient_retained_model_load_failure_is_not_retried(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Do not retry a different loader error whose cause is not the observed descriptor race."""
+    artifact = serialize_complete_artifact(_compile_test_model(), "baseline", tmp_path)
+    attempts = 0
+
+    def rejected_loader(_path: str) -> mujoco.MjModel:
+        """Raise one nonretryable parser failure."""
+        nonlocal attempts
+        attempts += 1
+        raise ValueError("different model-load failure")
+
+    monkeypatch.setattr(artifact_module, "_load_model_from_binary_path", rejected_loader)
+    with pytest.raises(ValueError, match="different model-load failure"):
+        artifact_module.load_subject_model(artifact.retained)
+    assert attempts == 1

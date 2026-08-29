@@ -48,11 +48,12 @@ def test_invalid_invocation_emits_strict_operational_failure(capsys) -> None:
     assert failure["operation"] == "compare"
 
 
-def test_the_root_help_lists_all_three_installed_commands(tmp_path: Path) -> None:
+def test_the_root_help_lists_every_installed_command(tmp_path: Path) -> None:
     """Protect the supported user interface from accidental drift.
 
-    This scenario exercises the root help lists all three installed commands; the observable
-    command or import contract is pinned without relying on repository layout.
+    This scenario exercises the root help listing every installed command and stating the
+    product's decisions; the observable command or import contract is pinned without relying on
+    repository layout.
     """
     environment = dict(os.environ)
     environment["PYTHONDONTWRITEBYTECODE"] = "1"
@@ -66,8 +67,44 @@ def test_the_root_help_lists_all_three_installed_commands(tmp_path: Path) -> Non
         text=True,
     )
     assert completed.returncode == 0
-    for command in ("compare", "audit-timestep", "certify"):
+    for command in (
+        "certify",
+        "review-model",
+        "compare",
+        "audit-timestep",
+        "qualify-workload",
+        "review-runtime",
+        "run-runtime-review",
+    ):
         assert command in completed.stdout
+    assert (
+        "Verify compiled MuJoCo models, review static model changes, compare declared "
+        "workloads, audit timesteps, and qualify whether declared workloads detect declared "
+        "model perturbations." in completed.stdout
+    )
+
+
+def test_runtime_review_execution_help_describes_the_complete_journey(
+    tmp_path: Path,
+) -> None:
+    """Explain explicit prepared profiles, twelve cells, and the existing referee."""
+    environment = dict(os.environ)
+    environment["PYTHONDONTWRITEBYTECODE"] = "1"
+    environment["PYTHONPATH"] = str(Path(__file__).parents[2] / "src")
+    completed = subprocess.run(
+        [sys.executable, "-m", "metrifid.cli", "run-runtime-review", "--help"],
+        cwd=tmp_path,
+        env=environment,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode == 0
+    normalized = " ".join(completed.stdout.split())
+    assert "two already-prepared explicit Python profiles" in normalized
+    assert "twelve sequential evidence cells" in normalized
+    assert "existing Runtime Review evaluator" in normalized
+    assert completed.stderr == ""
 
 
 def test_the_certify_parser_freezes_the_public_argument_contract(tmp_path: Path) -> None:

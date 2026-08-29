@@ -1,0 +1,50 @@
+<mujoco model="native_upgrade_articulated_chain">
+  <compiler angle="radian"/>
+  <option timestep="0.004" gravity="0 0 0" integrator="RK4"/>
+  <default>
+    <joint armature="0.01" damping="0.04"/>
+    <geom type="capsule" size="0.025" fromto="0 0 0 0.15 0 0" density="250" contype="0" conaffinity="0"/>
+    <motor gear="0.25" ctrllimited="true" ctrlrange="-1 1"/>
+  </default>
+  <worldbody>
+    <body name="link_01"><joint name="joint_01" axis="0 0 1"/><geom name="geom_01"/>
+      <body name="link_02" pos="0.15 0 0"><joint name="joint_02" axis="0 1 0"/><geom name="geom_02"/>
+        <body name="link_03" pos="0.15 0 0"><joint name="joint_03" axis="0 0 1"/><geom name="geom_03"/>
+          <body name="link_04" pos="0.15 0 0"><joint name="joint_04" axis="0 1 0"/><geom name="geom_04"/>
+            <body name="link_05" pos="0.15 0 0"><joint name="joint_05" axis="0 0 1"/><geom name="geom_05"/>
+              <body name="link_06" pos="0.15 0 0"><joint name="joint_06" axis="0 1 0"/><geom name="geom_06"/>
+                <body name="link_07" pos="0.15 0 0"><joint name="joint_07" axis="0 0 1"/><geom name="geom_07"/>
+                  <body name="link_08" pos="0.15 0 0"><joint name="joint_08" axis="0 1 0"/><geom name="geom_08"/>
+                    <body name="link_09" pos="0.15 0 0"><joint name="joint_09" axis="0 0 1"/><geom name="geom_09"/>
+                      <body name="link_10" pos="0.15 0 0"><joint name="joint_10" axis="0 1 0"/><geom name="geom_10"/>
+                        <body name="link_11" pos="0.15 0 0"><joint name="joint_11" axis="0 0 1"/><geom name="geom_11"/>
+                          <body name="link_12" pos="0.15 0 0"><joint name="joint_12" axis="0 1 0"/><geom name="geom_12"/>
+                            <site name="chain_tip" pos="0.15 0 0" size="0.008"/>
+                          </body>
+                        </body>
+                      </body>
+                    </body>
+                  </body>
+                </body>
+              </body>
+            </body>
+          </body>
+        </body>
+      </body>
+    </body>
+  </worldbody>
+  <actuator>
+    <motor name="drive_01" joint="joint_01"/><motor name="drive_02" joint="joint_02"/>
+    <motor name="drive_03" joint="joint_03"/><motor name="drive_04" joint="joint_04"/>
+    <motor name="drive_05" joint="joint_05"/><motor name="drive_06" joint="joint_06"/>
+    <motor name="drive_07" joint="joint_07"/><motor name="drive_08" joint="joint_08"/>
+    <motor name="drive_09" joint="joint_09"/><motor name="drive_10" joint="joint_10"/>
+    <motor name="drive_11" joint="joint_11"/><motor name="drive_12" joint="joint_12"/>
+  </actuator>
+  <sensor>
+    <jointpos name="joint_01_position" joint="joint_01"/>
+    <jointpos name="joint_06_position" joint="joint_06"/>
+    <jointpos name="joint_12_position" joint="joint_12"/>
+    <framepos name="chain_tip_position" objtype="site" objname="chain_tip"/>
+  </sensor>
+</mujoco>

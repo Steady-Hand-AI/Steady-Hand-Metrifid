@@ -10,6 +10,8 @@ from pathlib import Path
 import mujoco  # type: ignore[import-untyped]
 
 from .._model_admission import (
+    MujocoClaimSurface,
+    MujocoRuntimeAdmission,
     admit_compiled_model,
     compile_model_identity,
     compile_snapshot_model,
@@ -56,7 +58,7 @@ def open_live_model_pair(
     aliases_json: str | bytes | None,
 ) -> Iterator[LiveModelPair]:
     """Keep both closure snapshots and admitted compiled models alive for replay."""
-    require_supported_runtime()
+    runtime = require_supported_runtime(MujocoClaimSurface.DYNAMIC_REPLAY)
     with ExitStack() as stack:
         baseline_snapshot = stack.enter_context(
             create_model_closure_snapshot(baseline_root, baseline_entrypoint, "baseline")
@@ -64,8 +66,10 @@ def open_live_model_pair(
         candidate_snapshot = stack.enter_context(
             create_model_closure_snapshot(candidate_root, candidate_entrypoint, "candidate")
         )
-        baseline_model, baseline_compiled = _admitted_model(baseline_snapshot, "baseline")
-        candidate_model, candidate_compiled = _admitted_model(candidate_snapshot, "candidate")
+        baseline_model, baseline_compiled = _admitted_model(baseline_snapshot, "baseline", runtime)
+        candidate_model, candidate_compiled = _admitted_model(
+            candidate_snapshot, "candidate", runtime
+        )
         aliases, raw_hash, semantic_hash = _parse_aliases(
             aliases_json,
             baseline_snapshot.identity.sha256(),
@@ -101,9 +105,9 @@ def open_live_model_pair(
 @contextmanager
 def open_snapshot_model_pair(snapshot: ModelClosureSnapshot) -> Iterator[LiveModelPair]:
     """Compile both audit roles once from one campaign-owned immutable source snapshot."""
-    require_supported_runtime()
-    baseline_model, baseline_compiled = _admitted_model(snapshot, "baseline")
-    candidate_model, candidate_compiled = _admitted_model(snapshot, "candidate")
+    runtime = require_supported_runtime(MujocoClaimSurface.DYNAMIC_REPLAY)
+    baseline_model, baseline_compiled = _admitted_model(snapshot, "baseline", runtime)
+    candidate_model, candidate_compiled = _admitted_model(snapshot, "candidate", runtime)
     aliases, raw_hash, semantic_hash = _parse_aliases(
         None,
         snapshot.identity.sha256(),
@@ -127,12 +131,14 @@ def open_snapshot_model_pair(snapshot: ModelClosureSnapshot) -> Iterator[LiveMod
 
 
 def _admitted_model(
-    snapshot: ModelClosureSnapshot, role: ModelRole
+    snapshot: ModelClosureSnapshot,
+    role: ModelRole,
+    runtime: MujocoRuntimeAdmission,
 ) -> tuple[mujoco.MjModel, CompiledModelIdentity]:
     """Compile, immutability-check, admit, and describe one snapshot model."""
     model = compile_snapshot_model(snapshot, role)
     verify_model_closure_unchanged(snapshot, role)
-    admit_compiled_model(model, role)
+    admit_compiled_model(model, role, runtime)
     compiled = compile_model_identity(model, snapshot.identity.sha256(), role)
     return model, compiled
 

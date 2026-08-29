@@ -18,6 +18,7 @@ from metrifid import _timegrid as timegrid
 from metrifid import _workload as workload
 from metrifid._npz import ArtifactAdmissionRefusal
 from metrifid.operational import OperationalReasonCode
+from tests._support.model_identity import build_model_pair_identity
 
 
 def _write_model(root: Path, *, candidate: bool = False, other_name: bool = False) -> None:
@@ -59,7 +60,7 @@ def _pair(tmp_path: Path) -> identity.ModelPairIdentity:
     candidate = tmp_path / "candidate"
     _write_model(baseline)
     _write_model(candidate, candidate=True)
-    return identity.build_model_pair_identity(baseline, "model.xml", candidate, "model.xml")
+    return build_model_pair_identity(baseline, "model.xml", candidate, "model.xml")
 
 
 def _write_artifacts(root: Path, pair: identity.ModelPairIdentity) -> tuple[Path, Path]:
@@ -153,9 +154,7 @@ def test_artifacts_cannot_be_rebound_to_a_different_alignment(tmp_path: Path) ->
     other_candidate = tmp_path / "other-candidate"
     _write_model(other_baseline, other_name=True)
     _write_model(other_candidate, candidate=True, other_name=True)
-    other = identity.build_model_pair_identity(
-        other_baseline, "model.xml", other_candidate, "model.xml"
-    )
+    other = build_model_pair_identity(other_baseline, "model.xml", other_candidate, "model.xml")
     with pytest.raises(ArtifactAdmissionRefusal) as exc:
         workload.load_state_artifact(state_path, other)
     assert exc.value.reason is OperationalReasonCode.STATE_NAME_SET_MISMATCH

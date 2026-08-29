@@ -5,7 +5,7 @@ from __future__ import annotations
 import copy
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -60,7 +60,7 @@ def differing_output(tmp_path_factory: pytest.TempPathFactory) -> Path:
 
 def _load_receipt_json(path: Path) -> dict[str, Any]:
     """Decode a published receipt into a mutable mapping for validation attacks."""
-    return json.loads(path.read_text(encoding="utf-8"))
+    return cast("dict[str, Any]", json.loads(path.read_text(encoding="utf-8")))
 
 
 _DECISION_NAMES = (
@@ -163,7 +163,10 @@ _CERTIFIED_TAMPERS: tuple[tuple[str, Any], ...] = (
     ),
     (
         "artifact version integer",
-        lambda r: r["baseline"]["compiled_artifact"].__setitem__("mujoco_version_integer", 3009000),
+        lambda r: r["baseline"]["compiled_artifact"].__setitem__(
+            "mujoco_version_integer",
+            int(r["baseline"]["compiled_artifact"]["mujoco_version_integer"]) + 1,
+        ),
     ),
     (
         "source closure total bytes",
@@ -255,7 +258,7 @@ def _require_field_report(receipt: dict[str, Any]) -> dict[str, Any]:
 
 def _first_changed(receipt: dict[str, Any]) -> dict[str, Any]:
     """Select the first changed-field entry for focused contradiction attacks."""
-    return _require_field_report(receipt)["changed_fields"][0]
+    return cast("dict[str, Any]", _require_field_report(receipt)["changed_fields"][0])
 
 
 _EXIT_AND_TOOL_TAMPERS: tuple[tuple[str, Any], ...] = (

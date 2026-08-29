@@ -30,18 +30,29 @@ def _bind(
     monkeypatch: pytest.MonkeyPatch,
     root: Path,
     system: str,
+    *,
+    native_version: str = "3.12.0",
 ) -> None:
     """Construct the bind fixture used by compare environment scenarios.
 
     Deterministic setup isolates compare environment without bypassing the contract boundary
     under assertion.
     """
-    monkeypatch.setattr(
-        environment,
-        "mujoco",
-        SimpleNamespace(__file__=str(root / "__init__.py")),
-    )
+    runtime = SimpleNamespace(__file__=str(root / "__init__.py"))
+    monkeypatch.setattr(environment, "mujoco", runtime)
     monkeypatch.setattr(environment.platform, "system", lambda: system)
+
+    def admit(
+        operation: environment.MujocoClaimSurface,
+        *,
+        runtime_module: object,
+    ) -> SimpleNamespace:
+        """Return the coherent native identity measured at the admission boundary."""
+        assert operation is environment.MujocoClaimSurface.DYNAMIC_REPLAY
+        assert runtime_module is runtime
+        return SimpleNamespace(native_version_string=native_version)
+
+    monkeypatch.setattr(environment, "admit_mujoco_runtime", admit)
 
 
 def _write(root: Path, name: str, payload: bytes = _PAYLOAD) -> Path:
@@ -51,6 +62,7 @@ def _write(root: Path, name: str, payload: bytes = _PAYLOAD) -> Path:
     environment.
     """
     path = root / name
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(payload)
     return path
 
@@ -62,7 +74,7 @@ def test_linux_selects_shared_object(tmp_path: Path, monkeypatch: pytest.MonkeyP
     artifact publication must remain stable for the declared workload.
     """
     root = _package_root(tmp_path)
-    _write(root, "libmujoco.so.3.10.0")
+    _write(root, "libmujoco.so.3.12.0")
     _bind(monkeypatch, root, "Linux")
     assert environment._native_mujoco_sha256() == hashlib.sha256(_PAYLOAD).hexdigest()
 
@@ -74,7 +86,7 @@ def test_darwin_selects_dylib(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
     publication must remain stable for the declared workload.
     """
     root = _package_root(tmp_path)
-    _write(root, "libmujoco.3.10.0.dylib")
+    _write(root, "libmujoco.3.12.0.dylib")
     _bind(monkeypatch, root, "Darwin")
     assert environment._native_mujoco_sha256() == hashlib.sha256(_PAYLOAD).hexdigest()
 
@@ -86,7 +98,7 @@ def test_darwin_ignores_the_linux_pattern(tmp_path: Path, monkeypatch: pytest.Mo
     artifact publication must remain stable for the declared workload.
     """
     root = _package_root(tmp_path)
-    _write(root, "libmujoco.so.3.10.0")
+    _write(root, "libmujoco.so.3.12.0")
     _bind(monkeypatch, root, "Darwin")
     with pytest.raises(RuntimeError):
         environment._native_mujoco_sha256()
@@ -99,20 +111,20 @@ def test_linux_ignores_the_darwin_pattern(tmp_path: Path, monkeypatch: pytest.Mo
     artifact publication must remain stable for the declared workload.
     """
     root = _package_root(tmp_path)
-    _write(root, "libmujoco.3.10.0.dylib")
+    _write(root, "libmujoco.3.12.0.dylib")
     _bind(monkeypatch, root, "Linux")
     with pytest.raises(RuntimeError):
         environment._native_mujoco_sha256()
 
 
 @pytest.mark.parametrize("system", ["Linux", "Darwin"])
-def test_zero_candidates_refuse(
+def test_missing_exact_measured_library_refuses(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, system: str
 ) -> None:
     """Keep workload comparison decisions reproducible.
 
-    This scenario exercises zero candidates refuse; status, numerical evidence, and artifact
-    publication must remain stable for the declared workload.
+    This scenario exercises missing exact measured library refusal; status, numerical evidence,
+    and artifact publication must remain stable for the declared workload.
     """
     root = _package_root(tmp_path)
     _bind(monkeypatch, root, system)
@@ -121,27 +133,27 @@ def test_zero_candidates_refuse(
 
 
 @pytest.mark.parametrize(
-    ("system", "first", "second"),
+    ("system", "exact"),
     [
-        ("Linux", "libmujoco.so.3.10.0", "libmujoco.so.3.10.0.backup"),
-        ("Darwin", "libmujoco.3.10.0.dylib", "libmujoco.3.10.0.copy.dylib"),
+        ("Linux", "libmujoco.so.3.12.0"),
+        ("Darwin", "libmujoco.3.12.0.dylib"),
     ],
+    ids=("linux", "darwin"),
 )
-def test_ambiguous_candidates_refuse(
+def test_ambiguous_duplicate_exact_measured_libraries_refuse(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     system: str,
-    first: str,
-    second: str,
+    exact: str,
 ) -> None:
     """Keep workload comparison decisions reproducible.
 
-    This scenario exercises ambiguous candidates refuse; status, numerical evidence, and
-    artifact publication must remain stable for the declared workload.
+    This scenario exercises ambiguous duplicate exact measured libraries refusal; status,
+    numerical evidence, and artifact publication must remain stable for the declared workload.
     """
     root = _package_root(tmp_path)
-    _write(root, first)
-    _write(root, second, b"other-payload")
+    _write(root, exact)
+    _write(root, f"duplicate/{exact}", b"other-payload")
     _bind(monkeypatch, root, system)
     with pytest.raises(RuntimeError):
         environment._native_mujoco_sha256()
@@ -149,15 +161,16 @@ def test_ambiguous_candidates_refuse(
 
 @pytest.mark.parametrize(
     ("system", "name"),
-    [("Linux", "libmujoco.so.3.10.0"), ("Darwin", "libmujoco.3.10.0.dylib")],
+    [("Linux", "libmujoco.so.3.12.0"), ("Darwin", "libmujoco.3.12.0.dylib")],
+    ids=("linux", "darwin"),
 )
-def test_symlinked_library_is_refused(
+def test_symlink_only_exact_measured_library_refuses(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, system: str, name: str
 ) -> None:
     """Keep workload comparison decisions reproducible.
 
-    This scenario exercises symlinked library is refused; status, numerical evidence, and
-    artifact publication must remain stable for the declared workload.
+    This scenario exercises symlink-only exact measured library refusal; status, numerical
+    evidence, and artifact publication must remain stable for the declared workload.
     """
     root = _package_root(tmp_path)
     target = _write(root, "engine.bin")
@@ -170,9 +183,10 @@ def test_symlinked_library_is_refused(
 @pytest.mark.parametrize(
     ("system", "real", "link"),
     [
-        ("Linux", "libmujoco.so.3.10.0", "libmujoco.so"),
-        ("Darwin", "libmujoco.3.10.0.dylib", "libmujoco.dylib"),
+        ("Linux", "libmujoco.so.3.12.0", "libmujoco.so"),
+        ("Darwin", "libmujoco.3.12.0.dylib", "libmujoco.dylib"),
     ],
+    ids=("linux", "darwin"),
 )
 def test_symlink_beside_regular_library_does_not_create_ambiguity(
     tmp_path: Path,
@@ -194,33 +208,76 @@ def test_symlink_beside_regular_library_does_not_create_ambiguity(
 
 
 @pytest.mark.parametrize(
-    ("system", "exact", "other"),
+    ("system", "current", "stale"),
     [
-        ("Linux", "libmujoco.so.3.10.0", "libmujoco.so.3.9.0"),
-        ("Darwin", "libmujoco.3.10.0.dylib", "libmujoco.3.9.0.dylib"),
+        ("Linux", "libmujoco.so.3.12.0", "libmujoco.so.3.10.0"),
+        ("Darwin", "libmujoco.3.12.0.dylib", "libmujoco.3.10.0.dylib"),
     ],
+    ids=("linux", "darwin"),
 )
-def test_exact_version_narrowing_is_preserved(
+def test_matching_native_library_is_selected_when_stale_older_bytes_are_present(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     system: str,
-    exact: str,
-    other: str,
+    current: str,
+    stale: str,
 ) -> None:
-    """Keep workload comparison decisions reproducible.
-
-    This scenario exercises exact version narrowing is preserved; status, numerical evidence,
-    and artifact publication must remain stable for the declared workload.
-    """
+    """Bind the admitted runtime library rather than a stale package artifact."""
     root = _package_root(tmp_path)
-    _write(root, exact)
-    _write(root, other, b"stale-payload")
+    _write(root, current)
+    stale_path = _write(root, stale, b"stale-payload")
+    _bind(monkeypatch, root, system, native_version="3.12.0")
+    observed = environment._native_mujoco_sha256()
+    assert observed == hashlib.sha256(_PAYLOAD).hexdigest()
+    assert observed != hashlib.sha256(stale_path.read_bytes()).hexdigest()
+
+
+@pytest.mark.parametrize(
+    ("system", "stale"),
+    [
+        ("Linux", "libmujoco.so.3.10.0"),
+        ("Darwin", "libmujoco.3.10.0.dylib"),
+    ],
+    ids=("linux", "darwin"),
+)
+def test_stale_older_native_library_is_never_hashed_for_a_newer_admitted_runtime(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    system: str,
+    stale: str,
+) -> None:
+    """Refuse instead of falling back when only stale native bytes are installed."""
+    root = _package_root(tmp_path)
+    _write(root, stale, b"stale-payload")
+    _bind(monkeypatch, root, system, native_version="3.12.0")
+    with pytest.raises(RuntimeError, match="matching the admitted runtime"):
+        environment._native_mujoco_sha256()
+
+
+@pytest.mark.parametrize(
+    ("system", "near_match"),
+    [
+        ("Linux", "libmujoco.so.3.12.0.backup"),
+        ("Darwin", "libmujoco.3.12.0.copy.dylib"),
+    ],
+    ids=("linux", "darwin"),
+)
+def test_similarly_named_file_does_not_replace_the_exact_platform_filename(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    system: str,
+    near_match: str,
+) -> None:
+    """Require the complete platform filename, not a prefix or glob-compatible variant."""
+    root = _package_root(tmp_path)
+    _write(root, near_match)
     _bind(monkeypatch, root, system)
-    assert environment._native_mujoco_sha256() == hashlib.sha256(_PAYLOAD).hexdigest()
+    with pytest.raises(RuntimeError, match="matching the admitted runtime"):
+        environment._native_mujoco_sha256()
 
 
 @pytest.mark.parametrize("system", ["Windows", "Java", "FreeBSD", ""])
-def test_unadmitted_platforms_have_no_discovery_pattern(
+def test_unsupported_platforms_refuse(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, system: str
 ) -> None:
     """Keep workload comparison decisions reproducible.
@@ -229,8 +286,8 @@ def test_unadmitted_platforms_have_no_discovery_pattern(
     evidence, and artifact publication must remain stable for the declared workload.
     """
     root = _package_root(tmp_path)
-    _write(root, "libmujoco.so.3.10.0")
-    _write(root, "libmujoco.3.10.0.dylib")
+    _write(root, "libmujoco.so.3.12.0")
+    _write(root, "libmujoco.3.12.0.dylib")
     _bind(monkeypatch, root, system)
     with pytest.raises(RuntimeError):
         environment._native_mujoco_sha256()
@@ -251,7 +308,13 @@ def test_missing_package_path_refuses(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_installed_environment_identity_matches_the_running_host() -> None:
     """The real installed runtime must produce a schema-valid identity."""
     identity = environment.build_environment_identity(environment.EngineThreadpoolState.UNKNOWN)
-    assert identity.mujoco_version == "3.10.0"
+    admission = environment.admit_mujoco_runtime(
+        environment.MujocoClaimSurface.DYNAMIC_REPLAY,
+        runtime_module=environment.mujoco,
+    )
+    assert identity.mujoco_version == admission.package_version
+    assert admission.native_version_string == environment.mujoco.mj_versionString()
+    assert admission.native_version_integer == environment.mujoco.mj_version()
     assert identity.platform == f"{platform.system().lower()}-{platform.machine().lower()}"
     assert identity.libc
     assert identity.platform_release

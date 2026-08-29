@@ -10,6 +10,14 @@ hard ceiling applied before any parsing happens. Second, the parsed document is 
 node count, and string length, so a syntactically strict document still cannot exhaust memory or
 the interpreter stack.
 
+That second guarantee is published separately as :func:`enforce_json_structure` because other
+private trust boundaries parse with their own strict hooks and cannot route through
+:func:`bounded_strict_json_loads`. Runtime-review evidence is one such boundary: it decodes worker
+results with binary64 floats and input manifests with lexical :class:`~decimal.Decimal` values, and
+must keep those representations. Sharing this one iterative walk is what makes the depth bound a
+declared product policy instead of whatever nesting the running interpreter's parser happens to
+tolerate.
+
 Nothing here imports MuJoCo or NumPy: admission must work in a pure environment.
 """
 
@@ -27,6 +35,7 @@ __all__ = [
     "JsonAdmissionError",
     "JsonAdmissionLimits",
     "bounded_strict_json_loads",
+    "enforce_json_structure",
     "read_bounded_regular_file",
     "read_bounded_strict_json",
 ]
@@ -148,7 +157,7 @@ def bounded_strict_json_loads(data: bytes | str, limits: JsonAdmissionLimits) ->
         raise JsonAdmissionError("JSON document nesting exhausted the interpreter stack") from exc
     except (ValueError, TypeError) as exc:
         raise JsonAdmissionError(f"strict JSON admission failed: {exc}") from exc
-    _enforce_structure(parsed, limits)
+    enforce_json_structure(parsed, limits)
     return parsed
 
 
@@ -213,11 +222,25 @@ def _as_bounded_bytes(data: bytes | str, max_bytes: int) -> bytes:
     return payload
 
 
-def _enforce_structure(value: CanonicalValue, limits: JsonAdmissionLimits) -> None:
-    """Enforce depth, node, and string bounds over one parsed canonical document.
+def enforce_json_structure(value: object, limits: JsonAdmissionLimits) -> None:
+    """Enforce depth, node, and string bounds over one already-parsed JSON document.
 
-    The walk is iterative so a deeply nested document is refused by the declared depth bound rather
-    than by exhausting the interpreter stack.
+    The walk is iterative, so a deeply nested document is refused by the declared depth bound rather
+    than by whatever nesting the running interpreter's parser happens to tolerate. That is the whole
+    point of applying it after parsing: two supported CPython versions must admit and refuse the same
+    documents.
+
+    The value is typed as :class:`object` rather than :data:`~metrifid.json_values.CanonicalValue`
+    because callers with their own strict parse hooks reuse this bound. Only containers are
+    traversed and only strings are measured, so a :class:`float` or :class:`~decimal.Decimal` leaf is
+    counted once and returned to its caller unchanged.
+
+    Args:
+        value: One parsed JSON document.
+        limits: The exact bounds to enforce.
+
+    Raises:
+        JsonAdmissionError: The document exceeded the depth, node, or string bound.
     """
     nodes = 0
     pending: list[tuple[object, int]] = [(value, 0)]
@@ -249,6 +272,17 @@ def _enforce_structure(value: CanonicalValue, limits: JsonAdmissionLimits) -> No
 
 
 def _enforce_string(value: str, max_string_bytes: int) -> None:
-    """Enforce the strict UTF-8 byte ceiling for one key or string value."""
-    if len(value.encode("utf-8", errors="strict")) > max_string_bytes:
+    """Enforce strict UTF-8 encodability and the byte ceiling for one key or string value.
+
+    ``json`` accepts an escaped lone surrogate and yields a ``str`` that has no
+    strict UTF-8 encoding. Measuring that string raises :class:`UnicodeEncodeError`, which is a
+    parser-shaped exception escaping an admission boundary; callers that translate
+    :class:`JsonAdmissionError` would let it through untyped. Translating it here keeps one refusal
+    vocabulary at the boundary and preserves the original error as the cause.
+    """
+    try:
+        encoded = value.encode("utf-8", errors="strict")
+    except UnicodeEncodeError as error:
+        raise JsonAdmissionError("JSON string is not encodable as strict UTF-8") from error
+    if len(encoded) > max_string_bytes:
         raise JsonAdmissionError(f"JSON string exceeds the {max_string_bytes} byte admission limit")

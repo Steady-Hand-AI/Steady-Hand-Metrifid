@@ -1,0 +1,20 @@
+<mujoco model="native_upgrade_smooth_pendulum">
+  <compiler angle="radian"/>
+  <option timestep="0.004" gravity="0 0 0" integrator="RK4"/>
+  <default>
+    <joint armature="0.01" damping="0.08"/>
+    <geom contype="0" conaffinity="0" density="500"/>
+  </default>
+  <worldbody>
+    <body name="pendulum" pos="0 0 0">
+      <joint name="theta" type="hinge" axis="0 1 0"/>
+      <geom name="pendulum_rod" type="capsule" fromto="0 0 0 0 0 -0.5" size="0.035"/>
+    </body>
+  </worldbody>
+  <actuator>
+    <motor name="drive" joint="theta" gear="1" ctrllimited="true" ctrlrange="-1 1"/>
+  </actuator>
+  <sensor>
+    <jointpos name="theta_position" joint="theta"/>
+  </sensor>
+</mujoco>

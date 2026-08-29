@@ -35,16 +35,21 @@ The editable install above is for editing, linting, typing, and pure/unit work o
 security, receipt, command, and release evidence must run against a noneditable wheel, because the
 product is the installed distribution rather than the source tree.
 
-The MuJoCo native engine `3.10.0` exactly is a hard requirement — the compiled-artifact identity is
-only meaningful against a fixed engine build. A binding-only `3.10.0.postN` package targets that
-same engine and is accepted; any other engine version refuses rather than guessing.
+Metrifid compiles with the exact admitted stable MuJoCo runtime and binds that engine build into
+the compiled-artifact identity. The newest stable MuJoCo is the primary development and release
+profile; exact retained older profiles remain compatibility-tested, with 3.9 as the support floor.
 
 Python 3.11 or newer is supported, with no upper bound and no runtime rejection based on the
 interpreter name. Release evidence currently uses CPython because the MuJoCo binary wheels exercised
-by CI target CPython. The package metadata has no artificial upper bound. CI is configured for
-CPython 3.11–3.14 on Linux x86_64, CPython 3.12 and 3.14 on macOS arm64, and CPython 3.12 on
-macOS x86_64. Linux and macOS are admitted when the shared POSIX capability gate passes, with no
-architecture whitelist. Native Windows is unsupported; use WSL.
+by CI target CPython. The package metadata has no artificial upper bound. Linux and macOS are
+admitted when the shared POSIX capability gate passes, with no architecture whitelist. Native
+Windows is unsupported; use WSL.
+
+CI runs two complete installed-wheel suites, because they answer different questions: one on the
+primary resolver-latest profile and one on the declared dependency-floor profile. The other default
+interpreter and platform profiles get bounded smokes. The exact interpreters and runner images
+change as upstream support does, so the workflow itself is the authority rather than a list repeated
+here: <https://github.com/Steady-Hand-AI/Steady-Hand-Metrifid/blob/main/.github/workflows/ci.yml>.
 
 ## Before you open a pull request
 
@@ -85,7 +90,7 @@ rather than the behavior of the product, and they were removed for that reason.
 
 Changing any of these is a breaking change and needs its own discussion first:
 
-- the three command shapes and their exit codes;
+- the command surface and each command's exit codes;
 - the completed statuses;
 - the complete-MJB identity method;
 - the published schema identifiers;
@@ -96,9 +101,10 @@ Changing any of these is a breaking change and needs its own discussion first:
 ## Style
 
 Ruff decides formatting and lint; there is no separate style guide to read. Keep functions small
-enough to read in one screen — nothing in `src/metrifid` exceeds 80 lines. Prefer a named helper
-over a comment explaining a long block, and prefer a comment explaining *why* over one restating
-*what*.
+enough to read in one go, and prefer a named helper over a comment explaining a long block. A few
+functions are longer than that where splitting them would scatter one decision or one descriptor
+lifetime across several frames; length is a smell to justify, not a limit enforced by a test.
+Prefer a comment explaining *why* over one restating *what*.
 
 ## Reporting a security issue
 

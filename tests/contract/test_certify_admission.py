@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import tempfile
 from collections import namedtuple
 from pathlib import Path
 
@@ -19,6 +20,9 @@ from metrifid._model_closure import (
 )
 from metrifid._owned_artifacts import RetainedArtifactPair
 from metrifid.operational import OperationalReasonCode
+
+# The exact prefix `metrifid.certify._run` allocates its scratch directory with.
+_CERTIFY_SCRATCH_PREFIX = "metrifid-certify-"
 
 _SIMPLE = """
 <mujoco model="admission">
@@ -309,20 +313,52 @@ def test_the_source_tree_is_never_modified(tmp_path: Path) -> None:
     assert sorted(item.name for item in root.iterdir()) == before_entries
 
 
-def test_no_private_artifact_survives_a_completed_run(tmp_path: Path) -> None:
+def test_no_private_artifact_survives_a_completed_run(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """Protect the certification admission assurance boundary from behavioral drift.
 
-    This scenario exercises no private artifact survives a completed run; the assertions pin the
-    user-visible result and the evidence needed to explain that result.
+    The subject is the scratch directory this one call allocates. Scanning the shared temporary root
+    for the production prefix cannot distinguish this call's failed cleanup from another xdist
+    worker's live directory, and production removes its scratch with `ignore_errors=True`, so a
+    failed removal is silent. The seam below records the exact path this invocation allocates, and
+    the assertions name that path.
     """
-    from metrifid.certify import certify_models
+    from metrifid.certify import _run, certify_models
+
+    scratch_root = tmp_path / "scratch"
+    scratch_root.mkdir()
+    # Another worker's live scratch, sharing the production prefix: a prefix-wide assertion would
+    # fail on it, and invocation-owned cleanup proof must not.
+    foreign = Path(tempfile.mkdtemp(prefix=_CERTIFY_SCRATCH_PREFIX, dir=scratch_root))
+    owned: list[Path] = []
+
+    class _ScratchProxy:
+        """Stand in for the module-local `tempfile` dependency of `metrifid.certify._run` alone."""
+
+        @staticmethod
+        def mkdtemp(prefix: str) -> str:
+            """Create the real scratch this call will use, under the test's own parent."""
+            assert prefix == _CERTIFY_SCRATCH_PREFIX, prefix
+            created = Path(tempfile.mkdtemp(prefix=prefix, dir=scratch_root))
+            owned.append(created)
+            return str(created)
+
+    # Only this module's dependency is replaced; the shared stdlib module is left untouched, so
+    # every other product module keeps the real one for the duration of the call.
+    monkeypatch.setattr(_run, "tempfile", _ScratchProxy)
 
     root = tmp_path / "tree"
     root.mkdir()
     (root / "model.xml").write_text(_SIMPLE, encoding="utf-8")
     certify_models(str(root / "model.xml"), str(root / "model.xml"), str(tmp_path / "out"))
+
+    assert len(owned) == 1, owned
+    assert owned[0].parent == scratch_root
+    assert owned[0].name.startswith(_CERTIFY_SCRATCH_PREFIX)
+    assert not owned[0].exists(), owned[0]
+    assert foreign.is_dir(), foreign
     assert not list(Path(tmp_path).rglob("*.mjb"))
-    assert not list(Path("/tmp").glob("metrifid-certify-*"))
 
 
 def _admit(
@@ -330,12 +366,19 @@ def _admit(
     *,
     system: str = "Linux",
     mujoco_package: str = "3.10.0",
+    mujoco_native_string: str | None = None,
     mujoco_native: int = 3010000,
 ) -> None:
     """Drive the one shared runtime gate directly against a declared environment."""
     monkeypatch.setattr(model_compile.os, "name", "posix")
     monkeypatch.setattr(model_compile.platform, "system", lambda: system)
     monkeypatch.setattr(mujoco, "__version__", mujoco_package)
+    native_string = (
+        mujoco_native_string
+        if mujoco_native_string is not None
+        else mujoco_package.split("+", 1)[0].split(".post", 1)[0]
+    )
+    monkeypatch.setattr(mujoco, "mj_versionString", lambda: native_string)
     monkeypatch.setattr(mujoco, "mj_version", lambda: mujoco_native)
     admission.require_supported_runtime()
 
@@ -412,10 +455,14 @@ def test_certify_accepts_a_binding_only_post_release(monkeypatch: pytest.MonkeyP
 
 
 def test_certify_refuses_a_mujoco_package_native_mismatch(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Refuse a package outside the engine family and a native engine that disagrees with it."""
+    """Refuse package/native string or integer identities that disagree."""
     with pytest.raises(ModelAdmissionRefusal) as caught:
-        _admit(monkeypatch, mujoco_package="3.11.0")
-    assert caught.value.reason is OperationalReasonCode.UNSUPPORTED_MUJOCO_VERSION
+        _admit(
+            monkeypatch,
+            mujoco_package="3.11.0",
+            mujoco_native_string="3.10.0",
+        )
+    assert caught.value.reason is OperationalReasonCode.MUJOCO_PYTHON_NATIVE_VERSION_MISMATCH
     with pytest.raises(ModelAdmissionRefusal) as caught:
         _admit(monkeypatch, mujoco_native=3011000)
     assert caught.value.reason is OperationalReasonCode.MUJOCO_PYTHON_NATIVE_VERSION_MISMATCH

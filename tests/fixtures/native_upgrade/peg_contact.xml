@@ -1,0 +1,21 @@
+<mujoco model="native_upgrade_peg_contact">
+  <compiler angle="radian"/>
+  <option timestep="0.004" gravity="0 0 0" integrator="Euler" iterations="100" tolerance="1e-10"/>
+  <default>
+    <geom friction="0.2 0.01 0.001" solref="0.01 1" density="500"/>
+  </default>
+  <worldbody>
+    <geom name="wall" type="box" pos="0.30 0 0" size="0.02 0.25 0.25" density="0"/>
+    <body name="peg" pos="0 0 0">
+      <joint name="peg_slide" type="slide" axis="1 0 0" damping="0.2"/>
+      <geom name="peg_tip" type="sphere" size="0.05" mass="0.2"/>
+    </body>
+  </worldbody>
+  <actuator>
+    <position name="peg_target" joint="peg_slide" kp="80" dampratio="1" ctrllimited="true" ctrlrange="-0.15 0.35"/>
+  </actuator>
+  <sensor>
+    <jointpos name="peg_position" joint="peg_slide"/>
+    <jointvel name="peg_velocity" joint="peg_slide"/>
+  </sensor>
+</mujoco>

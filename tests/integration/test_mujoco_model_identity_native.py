@@ -17,8 +17,8 @@ import pytest
 from metrifid import _model_admission as admission
 from metrifid import _model_closure as closure
 from metrifid import _model_compile as model_compile
-from metrifid import _model_identity as identity
 from metrifid._model_dependencies import discover_snapshot_dependencies as _discover
+from metrifid.compare import _model_pair as model_pair
 from metrifid.json_values import canonical_json_bytes
 from metrifid.operational import OperationalReasonCode
 from metrifid.schemas import (
@@ -26,6 +26,7 @@ from metrifid.schemas import (
     AliasArtifact,
     JointAliasPair,
 )
+from tests._support.model_identity import build_model_pair_identity
 
 
 def _write(root: Path, xml: str, *, name: str = "model.xml") -> Path:
@@ -173,7 +174,7 @@ def test_source_mutation_during_compilation_refuses(
     or unbound model components cannot support certification.
     """
     left, right = _pair(tmp_path, _hinge_model())
-    original = identity.compile_snapshot_model
+    original = model_pair.compile_snapshot_model
     calls = 0
 
     def mutate(snapshot: closure.ModelClosureSnapshot, role: closure.ModelRole) -> mujoco.MjModel:
@@ -189,9 +190,9 @@ def test_source_mutation_during_compilation_refuses(
             (left / "late.txt").write_text("mutation", encoding="utf-8")
         return model
 
-    monkeypatch.setattr(identity, "compile_snapshot_model", mutate)
+    monkeypatch.setattr(model_pair, "compile_snapshot_model", mutate)
     with pytest.raises(closure.ModelAdmissionRefusal) as exc:
-        identity.build_model_pair_identity(left, "model.xml", right, "model.xml")
+        build_model_pair_identity(left, "model.xml", right, "model.xml")
     assert _refusal_reason(exc) is OperationalReasonCode.MODEL_CLOSURE_MUTATED
 
 
@@ -359,11 +360,19 @@ def test_canonical_hash_is_stable_across_fresh_processes(tmp_path: Path) -> None
     ambiguous, or unbound model components cannot support certification.
     """
     left, right = _pair(tmp_path, _hinge_model())
-    code = """from pathlib import Path
-from metrifid._model_identity import build_model_pair_identity
-import sys
-value = build_model_pair_identity(Path(sys.argv[1]), 'model.xml', Path(sys.argv[2]), 'model.xml')
-print(value.model_pair_identity_sha256)
+    code = """import sys
+from pathlib import Path
+
+from metrifid.compare._model_pair import open_live_model_pair
+
+with open_live_model_pair(
+    baseline_root=Path(sys.argv[1]),
+    baseline_entrypoint='model.xml',
+    candidate_root=Path(sys.argv[2]),
+    candidate_entrypoint='model.xml',
+    aliases_json=None,
+) as pair:
+    print(pair.identity.model_pair_identity_sha256)
 """
     env = dict(os.environ)
     env["PYTHONDONTWRITEBYTECODE"] = "1"
@@ -400,13 +409,16 @@ def test_alias_json_is_strict_duplicate_key_refusal(tmp_path: Path) -> None:
     )
     duplicated = raw.replace('"schema_version":', '"schema_version":"x","schema_version":', 1)
     with pytest.raises(closure.ModelAdmissionRefusal) as exc:
-        identity.build_model_pair_identity(left, "model.xml", right, "model.xml", duplicated)
+        build_model_pair_identity(left, "model.xml", right, "model.xml", duplicated)
     assert _refusal_reason(exc) is OperationalReasonCode.ALIAS_SCHEMA_INVALID
 
 
 def test_mujoco_compiles_official_scene(g1_copy: Path) -> None:
-    """18. MuJoCo 3.10.0 compiles the official scene.xml."""
-    assert mujoco.__version__ == "3.10.0"
+    """18. The running admitted MuJoCo runtime compiles the official scene.xml."""
+    runtime = admission.require_supported_runtime()
+    assert mujoco.__version__ == runtime.package_version
+    assert mujoco.mj_versionString() == runtime.native_version_string
+    assert mujoco.mj_version() == runtime.native_version_integer
     model = mujoco.MjModel.from_xml_path(str(g1_copy / "scene.xml"))
     assert int(model.nu) == 29
     assert int(model.nhfield) >= 1
@@ -414,7 +426,7 @@ def test_mujoco_compiles_official_scene(g1_copy: Path) -> None:
 
 def test_same_role_model_pair_identity_for_scene(g1_copy: Path) -> None:
     """19. metrifid builds a same-role model pair identity for the official scene.xml."""
-    result = identity.build_model_pair_identity(g1_copy, "scene.xml", g1_copy, "scene.xml")
+    result = build_model_pair_identity(g1_copy, "scene.xml", g1_copy, "scene.xml")
     assert len(result.alignment.actuators) == 29
     for actuator in result.alignment.actuators:
         assert actuator.baseline_control_address == actuator.candidate_control_address
@@ -450,7 +462,7 @@ def test_source_model_bytes_unchanged(g1_copy: Path) -> None:
     with closure.create_model_closure_snapshot(g1_copy, "scene.xml", "baseline") as snapshot:
         _discover(snapshot, "baseline")
         admission.compile_snapshot_model(snapshot, "baseline")
-    identity.build_model_pair_identity(g1_copy, "scene.xml", g1_copy, "scene.xml")
+    build_model_pair_identity(g1_copy, "scene.xml", g1_copy, "scene.xml")
     assert _tree_digest(g1_copy) == before
 
 
@@ -465,17 +477,17 @@ def test_existing_scene_29dof_path_still_works(g1_copy: Path) -> None:
     assert dependencies
     for dependency in dependencies:
         assert dependency in members
-    result = identity.build_model_pair_identity(
-        g1_copy, "scene_29dof.xml", g1_copy, "scene_29dof.xml"
-    )
+    result = build_model_pair_identity(g1_copy, "scene_29dof.xml", g1_copy, "scene_29dof.xml")
     assert len(result.alignment.actuators) == 29
     assert _tree_digest(g1_copy) == before
 
 
 def test_official_scene_compiles_natively_and_is_admitted(g1_copy: Path) -> None:
-    """MuJoCo 3.10.0 compiles the official scene.xml and metrifid admits the same bytes."""
-    assert mujoco.__version__ == "3.10.0"
-    assert mujoco.mj_versionString() == "3.10.0"
+    """The running native runtime compiles the scene and Metrifid admits the same bytes."""
+    runtime = admission.require_supported_runtime()
+    assert mujoco.__version__ == runtime.package_version
+    assert mujoco.mj_versionString() == runtime.native_version_string
+    assert mujoco.mj_version() == runtime.native_version_integer
     native = mujoco.MjModel.from_xml_path(str(g1_copy / "scene.xml"))
     with closure.create_model_closure_snapshot(g1_copy, "scene.xml", "baseline") as snapshot:
         admitted = admission.compile_snapshot_model(snapshot, "baseline")
