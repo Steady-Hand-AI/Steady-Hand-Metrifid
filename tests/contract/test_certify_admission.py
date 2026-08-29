@@ -330,12 +330,19 @@ def _admit(
     *,
     system: str = "Linux",
     mujoco_package: str = "3.10.0",
+    mujoco_native_string: str | None = None,
     mujoco_native: int = 3010000,
 ) -> None:
     """Drive the one shared runtime gate directly against a declared environment."""
     monkeypatch.setattr(model_compile.os, "name", "posix")
     monkeypatch.setattr(model_compile.platform, "system", lambda: system)
     monkeypatch.setattr(mujoco, "__version__", mujoco_package)
+    native_string = (
+        mujoco_native_string
+        if mujoco_native_string is not None
+        else mujoco_package.split("+", 1)[0].split(".post", 1)[0]
+    )
+    monkeypatch.setattr(mujoco, "mj_versionString", lambda: native_string)
     monkeypatch.setattr(mujoco, "mj_version", lambda: mujoco_native)
     admission.require_supported_runtime()
 
@@ -412,10 +419,14 @@ def test_certify_accepts_a_binding_only_post_release(monkeypatch: pytest.MonkeyP
 
 
 def test_certify_refuses_a_mujoco_package_native_mismatch(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Refuse a package outside the engine family and a native engine that disagrees with it."""
+    """Refuse package/native string or integer identities that disagree."""
     with pytest.raises(ModelAdmissionRefusal) as caught:
-        _admit(monkeypatch, mujoco_package="3.11.0")
-    assert caught.value.reason is OperationalReasonCode.UNSUPPORTED_MUJOCO_VERSION
+        _admit(
+            monkeypatch,
+            mujoco_package="3.11.0",
+            mujoco_native_string="3.10.0",
+        )
+    assert caught.value.reason is OperationalReasonCode.MUJOCO_PYTHON_NATIVE_VERSION_MISMATCH
     with pytest.raises(ModelAdmissionRefusal) as caught:
         _admit(monkeypatch, mujoco_native=3011000)
     assert caught.value.reason is OperationalReasonCode.MUJOCO_PYTHON_NATIVE_VERSION_MISMATCH

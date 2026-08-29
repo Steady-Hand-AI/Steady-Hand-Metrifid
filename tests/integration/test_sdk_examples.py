@@ -8,6 +8,7 @@ The comparison example is exercised the same way, including its workload prepara
 from __future__ import annotations
 
 import ast
+import json
 import os
 import shutil
 import subprocess
@@ -18,7 +19,12 @@ import pytest
 
 import metrifid
 
-_SDK_SCRIPTS = ("certify_api.py", "compare_api.py", "audit_api.py")
+_SDK_SCRIPTS = (
+    "certify_api.py",
+    "compare_api.py",
+    "audit_api.py",
+    "workload_qualification_api.py",
+)
 _COMPARISON_STATUS = "NO_MATERIAL_DIFFERENCE_ON_DECLARED_WORKLOAD"
 
 
@@ -58,6 +64,40 @@ def test_each_sdk_example_runs_from_a_copied_directory(tmp_path: Path, script: s
         shutil.copy2(source, workspace / source.name)
     completed = _run([sys.executable, script], workspace)
     assert completed.returncode == 0, completed.stdout + completed.stderr
+
+
+def test_runtime_review_execution_sdk_example_exposes_copyable_help(tmp_path: Path) -> None:
+    """Keep the native execution example on the installed lazy SDK boundary."""
+    workspace = (tmp_path / "runtime-review-sdk").resolve()
+    workspace.mkdir()
+    source = _examples("sdk") / "runtime_review_run_api.py"
+    shutil.copy2(source, workspace / source.name)
+    completed = _run([sys.executable, source.name, "--help"], workspace)
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert "configuration" in completed.stdout
+
+
+def test_runtime_review_execution_product_example_is_self_contained(tmp_path: Path) -> None:
+    """Ship one strict run declaration, manifest, model, and user instructions together."""
+    workspace = (tmp_path / "runtime-review-run").resolve()
+    shutil.copytree(_examples("runtime_review_run"), workspace)
+    assert {path.name for path in workspace.iterdir()} == {
+        "README.md",
+        "manifest.json",
+        "model.xml",
+        "runtime_review_run.json",
+    }
+    run_config = json.loads((workspace / "runtime_review_run.json").read_text(encoding="utf-8"))
+    assert run_config["schema"] == "metrifid.runtime_review_run_config"
+    assert run_config["manifest"] == "manifest.json"
+    assert run_config["fixture_id"] == "smooth_pendulum"
+    assert str(run_config["baseline_python"]).startswith("/replace/")
+    assert str(run_config["candidate_python"]).startswith("/replace/")
+    manifest = json.loads((workspace / "manifest.json").read_text(encoding="utf-8"))
+    fixtures = manifest["fixtures"]
+    assert len(fixtures) == 1
+    assert fixtures[0]["xml_path"] == "model.xml"
+    assert (workspace / "model.xml").read_text(encoding="utf-8").startswith("<mujoco ")
 
 
 def test_sdk_examples_import_no_private_metrifid_module() -> None:

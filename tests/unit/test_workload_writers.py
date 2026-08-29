@@ -405,8 +405,11 @@ def test_a_real_compile_path_works_after_the_fixture(monkeypatch: pytest.MonkeyP
     monkeypatch.undo()
     import mujoco
 
-    assert mujoco.mj_versionString() == "3.10.0"
-    assert mujoco.mj_version() == 3010000
+    from metrifid._mujoco_runtime import admit_mujoco_runtime
+
+    runtime = admit_mujoco_runtime(runtime_module=mujoco)
+    assert runtime.native_version_string == mujoco.mj_versionString()
+    assert runtime.native_version_integer == mujoco.mj_version()
     assert hasattr(mujoco, "FatalError")
 
 

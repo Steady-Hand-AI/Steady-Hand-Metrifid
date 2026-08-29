@@ -1,25 +1,57 @@
 name: publish
 
+# Publication is manual, staged, and fail-closed. There is no tag-push trigger and no automatic path
+# to any registry: an operator must dispatch this workflow and choose `staged-release` explicitly.
+#
+# `validate-only` performs no publication and mutates no external state. It is not offline: building
+# and installing distributions contacts package indexes for dependencies.
+#
+# Actions artifacts in a public repository are readable by anyone with repository read access, so the
+# artifact carried between jobs holds only release-bound, public-safe files. Reports and logs stay on
+# the runner that produced them.
+
 on:
-  push:
-    tags:
-      - "0.2.1"
   workflow_dispatch:
+    inputs:
+      mode:
+        description: Build and validate only, or run the staged external release.
+        type: choice
+        required: true
+        default: validate-only
+        options:
+          - validate-only
+          - staged-release
+      release_version:
+        description: Canonical stable release version, for example 1.2.3.
+        type: string
+        required: true
+      expected_commit:
+        description: Full 40-character commit SHA this release must be built from.
+        type: string
+        required: true
+      planned_tag:
+        description: Annotated tag that must already point at the expected commit.
+        type: string
+        required: true
 
 permissions:
   contents: read
 
 concurrency:
-  group: publish-${{ github.ref }}
+  group: publish-${{ inputs.release_version }}
   cancel-in-progress: false
 
 env:
-  RELEASE_VERSION: "0.2.1"
-  RELEASE_ARTIFACT: metrifid-0.2.1-distributions
+  RELEASE_VERSION: ${{ inputs.release_version }}
+  EXPECTED_COMMIT: ${{ inputs.expected_commit }}
+  PLANNED_TAG: ${{ inputs.planned_tag }}
+  RELEASE_MODE: ${{ inputs.mode }}
+  RELEASE_ARTIFACT: metrifid-${{ inputs.release_version }}-release
+  PRIMARY_MUJOCO: "3.12.0"
 
 jobs:
-  build-and-validate:
-    name: build and validate release artifacts
+  workflow_contract:
+    name: workflow contract test
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -30,138 +62,538 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Verify tag, version, and clean source
+      - name: Run the durable workflow contract test
         run: |
-          test "${GITHUB_REF_NAME}" = "${RELEASE_VERSION}"
-          test "$(python -c 'from pathlib import Path; ns={}; exec(Path("src/metrifid/version.py").read_text(), ns); print(ns["__version__"])')" = "${RELEASE_VERSION}"
+          set -euo pipefail
+          python -m pip install -c .github/quality-constraints.txt pytest pyyaml
+          python -m pytest -q .github/tests/test_publish_workflow.py
+
+  build_and_validate:
+    name: build and validate release artifacts
+    needs: workflow_contract
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.12"
+
+      - name: Require a canonical stable version and the exact requested commit
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os
+          import pathlib
+          import re
+
+          version = os.environ["RELEASE_VERSION"]
+          tag = os.environ["PLANNED_TAG"]
+          expected = os.environ["EXPECTED_COMMIT"]
+          observed = os.environ["GITHUB_SHA"]
+
+          # One canonical stable PEP 440 release segment: numeric, no leading `v`, no leading-zero
+          # segment, and no dev, local, pre-release or post-release suffix of any kind.
+          canonical = re.compile(r"(?:0|[1-9][0-9]*)(?:\.(?:0|[1-9][0-9]*))+")
+          if canonical.fullmatch(version) is None:
+              raise SystemExit(f"release version is not a canonical stable version: {version!r}")
+          if tag != version:
+              raise SystemExit(f"planned tag {tag!r} does not equal release version {version!r}")
+          if not re.fullmatch(r"[0-9a-f]{40}", expected):
+              raise SystemExit(f"expected commit is not a full commit id: {expected!r}")
+          if expected != observed:
+              raise SystemExit(f"expected commit {expected!r} is not the checked-out {observed!r}")
+
+          namespace: dict[str, object] = {}
+          exec(pathlib.Path("src/metrifid/version.py").read_text(encoding="utf-8"), namespace)
+          source_version = namespace["__version__"]
+          if source_version != version:
+              raise SystemExit(
+                  f"source version {source_version!r} does not equal release version {version!r}"
+              )
+          PY
           test -z "$(git status --porcelain)"
 
-      - name: Install constrained release toolchain
+      - name: Install the constrained release toolchain
         run: |
+          set -euo pipefail
           python -m pip install -c .github/quality-constraints.txt \
-            build editables hatchling hypothesis mypy numpy pytest pytest-randomly ruff twine \
-            "mujoco==3.10.0.*"
+            build editables hatchling hypothesis mypy numpy pytest pytest-check pytest-randomly \
+            pyyaml ruff twine "mujoco==${PRIMARY_MUJOCO}"
 
       - name: Quality gates
         run: |
+          set -euo pipefail
           python -m ruff check --no-cache .
           python -m ruff format --check --no-cache .
           python -m mypy --strict src/metrifid
 
-      - name: Build direct distributions
+      - name: Build the original sdist and wheel independently from the checkout
         run: |
-          rm -rf dist build
-          python -m build
+          set -euo pipefail
+          rm -rf dist build parity sdist-extract
+          # Explicit targets, because a bare `python -m build` would create the sdist first and then
+          # build the wheel from it, leaving no independent original to compare against. No isolation,
+          # so the constrained Hatchling installed above is the backend that actually builds.
+          python -m build --sdist --wheel --no-isolation
           python -m twine check --strict dist/*
           test "$(find dist -maxdepth 1 -name '*.whl' | wc -l | tr -d ' ')" = "1"
           test "$(find dist -maxdepth 1 -name '*.tar.gz' | wc -l | tr -d ' ')" = "1"
+          test -f "dist/metrifid-${RELEASE_VERSION}-py3-none-any.whl"
+          test -f "dist/metrifid-${RELEASE_VERSION}.tar.gz"
 
-      - name: Test noneditable wheel
+      - name: Require complete, canonically named, safe wheel contents
         run: |
+          set -euo pipefail
+          python - <<'PY'
+          import base64
+          import csv
+          import hashlib
+          import os
+          import pathlib
+          import posixpath
+          import zipfile
+
+          version = os.environ["RELEASE_VERSION"]
+          wheel = pathlib.Path("dist") / f"metrifid-{version}-py3-none-any.whl"
+          archive = zipfile.ZipFile(wheel)
+          names = archive.namelist()
+          if len(set(names)) != len(names):
+              raise SystemExit("wheel contains duplicate member names")
+          normalized: dict[str, str] = {}
+          for name in names:
+              if "\\" in name:
+                  raise SystemExit(f"wheel member uses a backslash path: {name!r}")
+              # Every raw name must already be its canonical safe POSIX spelling. A dot alias, a
+              # repeated separator or a leading alias is refused even when nothing else collides.
+              canonical = posixpath.normpath(name)
+              if name != canonical:
+                  raise SystemExit(f"wheel member is not canonically named: {name!r} != {canonical!r}")
+              member = pathlib.PurePosixPath(name)
+              if member.is_absolute() or ".." in member.parts or "." in member.parts:
+                  raise SystemExit(f"unsafe wheel member: {name!r}")
+              if canonical in normalized:
+                  raise SystemExit(f"wheel member normalizes onto {normalized[canonical]!r}: {name!r}")
+              normalized[canonical] = name
+          if archive.testzip() is not None:
+              raise SystemExit(f"wheel CRC failure at {archive.testzip()}")
+
+          distinfo = f"metrifid-{version}.dist-info"
+          record_name = f"{distinfo}/RECORD"
+          rows = [r for r in csv.reader(archive.read(record_name).decode("utf-8").splitlines()) if r]
+          recorded = {row[0] for row in rows}
+          if recorded != set(names):
+              missing = sorted(set(names) - recorded)
+              extra = sorted(recorded - set(names))
+              raise SystemExit(f"RECORD does not describe the wheel: missing={missing} extra={extra}")
+          if len(recorded) != len(rows):
+              raise SystemExit("RECORD contains a duplicate path")
+          for path, digest, size in rows:
+              if path == record_name:
+                  if digest or size:
+                      raise SystemExit(f"RECORD self-row must be empty, got {digest!r},{size!r}")
+                  continue
+              payload = archive.read(path)
+              algorithm, _, encoded = digest.partition("=")
+              if algorithm != "sha256":
+                  raise SystemExit(f"RECORD uses an unexpected hash for {path}: {digest}")
+              actual = base64.urlsafe_b64encode(hashlib.sha256(payload).digest()).rstrip(b"=")
+              if actual.decode("ascii") != encoded:
+                  raise SystemExit(f"RECORD hash mismatch for {path}")
+              if int(size) != len(payload):
+                  raise SystemExit(f"RECORD size mismatch for {path}")
+
+          metadata = archive.read(f"{distinfo}/METADATA").decode("utf-8")
+          if f"Version: {version}" not in metadata.splitlines():
+              raise SystemExit("wheel metadata does not report the release version")
+          if "License-Expression: Apache-2.0" not in metadata.splitlines():
+              raise SystemExit("wheel metadata does not declare Apache-2.0")
+          for stem in ("LICENSE", "NOTICE"):
+              member_name = f"{distinfo}/licenses/{stem}"
+              if member_name not in names:
+                  raise SystemExit(f"wheel omits {member_name}")
+              if archive.read(member_name) != pathlib.Path(stem).read_bytes():
+                  raise SystemExit(f"wheel {stem} does not equal the repository {stem}")
+          if "metrifid/py.typed" not in names:
+              raise SystemExit("wheel omits the typing marker")
+          entry_points = archive.read(f"{distinfo}/entry_points.txt").decode("utf-8")
+          if "metrifid = metrifid.cli:main" not in entry_points:
+              raise SystemExit("wheel does not declare the console entry point")
+          print(f"wheel carries {len(names)} canonically named members")
+          PY
+
+      - name: Require wheel package bytes to equal declared source
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os
+          import pathlib
+          import tomllib
+          import zipfile
+
+          # The wheel payload is the package tree plus every member the project declares as a
+          # force-include. That mapping is read from pyproject.toml and proved, never assumed and
+          # never excused: a packaged file that is not declared is drift just as much as a missing one.
+          version = os.environ["RELEASE_VERSION"]
+          archive = zipfile.ZipFile(pathlib.Path("dist") / f"metrifid-{version}-py3-none-any.whl")
+          distinfo = f"metrifid-{version}.dist-info"
+          shipped = {
+              name: archive.read(name)
+              for name in archive.namelist()
+              if not name.startswith(f"{distinfo}/")
+          }
+
+          project = tomllib.loads(pathlib.Path("pyproject.toml").read_text(encoding="utf-8"))
+          wheel_target = project["tool"]["hatch"]["build"]["targets"]["wheel"]
+          packages = wheel_target["packages"]
+          if packages != ["src/metrifid"]:
+              raise SystemExit(f"unexpected wheel package roots: {packages!r}")
+          forced = wheel_target.get("force-include", {})
+          if not isinstance(forced, dict):
+              raise SystemExit("force-include must be a table of source to destination")
+
+          expected: dict[str, bytes] = {}
+          source_root = pathlib.Path("src")
+          for path in sorted(source_root.rglob("*")):
+              if path.is_file() and "__pycache__" not in path.parts:
+                  expected[path.relative_to(source_root).as_posix()] = path.read_bytes()
+
+          seen_destinations: set[str] = set()
+          for raw_source, raw_destination in sorted(forced.items()):
+              source = pathlib.Path(raw_source)
+              destination = pathlib.PurePosixPath(raw_destination)
+              if destination.is_absolute() or ".." in destination.parts:
+                  raise SystemExit(f"unsafe force-include destination: {raw_destination!r}")
+              if source.is_absolute() or ".." in source.parts:
+                  raise SystemExit(f"unsafe force-include source: {raw_source!r}")
+              if not source.is_file():
+                  raise SystemExit(f"declared force-include source is missing: {raw_source!r}")
+              key = destination.as_posix()
+              if key in seen_destinations or key in expected:
+                  raise SystemExit(f"ambiguous force-include destination: {raw_destination!r}")
+              seen_destinations.add(key)
+              expected[key] = source.read_bytes()
+
+          if shipped != expected:
+              only_wheel = sorted(set(shipped) - set(expected))
+              only_source = sorted(set(expected) - set(shipped))
+              different = sorted(
+                  name for name in set(shipped) & set(expected) if shipped[name] != expected[name]
+              )
+              raise SystemExit(
+                  "wheel package bytes do not equal declared source: "
+                  f"only_wheel={only_wheel} only_source={only_source} different={different}"
+              )
+          print(f"wheel payload equals declared source across {len(expected)} members")
+          PY
+
+      - name: Validate every sdist member before extracting anything
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os
+          import pathlib
+          import tarfile
+
+          version = os.environ["RELEASE_VERSION"]
+          sdist = pathlib.Path("dist") / f"metrifid-{version}.tar.gz"
+          expected_root = f"metrifid-{version}"
+          seen: set[str] = set()
+          with tarfile.open(sdist) as archive:
+              members = archive.getmembers()
+              for member in members:
+                  if "\\" in member.name:
+                      raise SystemExit(f"sdist member uses a backslash path: {member.name!r}")
+                  path = pathlib.PurePosixPath(member.name)
+                  if path.is_absolute() or ".." in path.parts:
+                      raise SystemExit(f"unsafe sdist path: {member.name!r}")
+                  if not member.isreg():
+                      raise SystemExit(f"unsupported sdist member type: {member.name!r}")
+                  if member.issym() or member.islnk():
+                      raise SystemExit(f"sdist contains a link: {member.name!r}")
+                  if member.ischr() or member.isblk() or member.isfifo():
+                      raise SystemExit(f"sdist contains a device or FIFO: {member.name!r}")
+                  if member.mode & 0o022:
+                      raise SystemExit(f"sdist member is group or other writable: {member.name!r}")
+                  normalized = os.path.normpath(member.name)
+                  if normalized in seen:
+                      raise SystemExit(f"duplicate normalized sdist path: {member.name!r}")
+                  seen.add(normalized)
+                  if path.parts[0] != expected_root:
+                      raise SystemExit(f"ambiguous sdist top-level layout: {member.name!r}")
+              # Only now that the complete member list has passed is extraction allowed.
+              archive.extractall("sdist-extract", filter="data")
+
+          root = pathlib.Path("sdist-extract") / expected_root
+          info = (root / "PKG-INFO").read_text(encoding="utf-8").splitlines()
+          if f"Version: {version}" not in info:
+              raise SystemExit("sdist PKG-INFO does not report the release version")
+          if "Metadata-Version: 2.4" not in info:
+              raise SystemExit("sdist PKG-INFO does not declare the expected metadata version")
+          if "License-Expression: Apache-2.0" not in info:
+              raise SystemExit("sdist PKG-INFO does not declare Apache-2.0")
+          for stem in ("LICENSE", "NOTICE"):
+              if (root / stem).read_bytes() != pathlib.Path(stem).read_bytes():
+                  raise SystemExit(f"sdist {stem} does not equal the repository {stem}")
+          for path in sorted(pathlib.Path("src").rglob("*")):
+              if path.is_file() and "__pycache__" not in path.parts:
+                  if (root / path).read_bytes() != path.read_bytes():
+                      raise SystemExit(f"sdist source member differs: {path.as_posix()}")
+          print(f"validated and extracted {len(members)} sdist members")
+          PY
+
+      - name: Build the parity wheel from the validated sdist only
+        run: |
+          set -euo pipefail
+          mkdir -p parity
+          python -m build --wheel --no-isolation --outdir parity \
+            "sdist-extract/metrifid-${RELEASE_VERSION}"
+          # The parity wheel is evidence, never a release artifact. It lives outside dist/ and is
+          # renamed so that no wheel glob, upload step, or release step can select it.
+          find parity -maxdepth 1 -name '*.whl' -exec mv {} parity/parity-rebuild.notdist \;
+          test ! -e "parity/metrifid-${RELEASE_VERSION}-py3-none-any.whl"
+          test "$(find parity -maxdepth 1 -name '*.whl' | wc -l | tr -d ' ')" = "0"
+          test -f parity/parity-rebuild.notdist
+
+      - name: Require the parity wheel to be equivalent to the independent original
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import os
+          import pathlib
+          import zipfile
+
+          version = os.environ["RELEASE_VERSION"]
+          original = zipfile.ZipFile(pathlib.Path("dist") / f"metrifid-{version}-py3-none-any.whl")
+          parity = zipfile.ZipFile(pathlib.Path("parity") / "parity-rebuild.notdist")
+          distinfo = f"metrifid-{version}.dist-info"
+
+          def package_members(archive: zipfile.ZipFile) -> dict[str, bytes]:
+              return {
+                  name: archive.read(name)
+                  for name in archive.namelist()
+                  if not name.startswith(f"{distinfo}/")
+              }
+
+          if package_members(original) != package_members(parity):
+              raise SystemExit("parity wheel package members differ from the original")
+          for name in ("entry_points.txt", "METADATA", "licenses/LICENSE", "licenses/NOTICE"):
+              if original.read(f"{distinfo}/{name}") != parity.read(f"{distinfo}/{name}"):
+                  raise SystemExit(f"parity wheel differs from the original in {name}")
+          if "metrifid/py.typed" not in parity.namelist():
+              raise SystemExit("parity wheel omits the typing marker")
+          PY
+
+      - name: Install the original wheel on the primary runtime and exercise the public surface
+        env:
+          SUITE_RUNTIME: ${{ runner.temp }}/suite-runtime.json
+          JUNIT_REPORT: ${{ runner.temp }}/release-junit.xml
+          MJB_LOG: ${{ runner.temp }}/mjb-characterization.log
+          DEMO_LOG: ${{ runner.temp }}/demo.log
+        run: |
+          set -euo pipefail
           RELEASE_VENV="$RUNNER_TEMP/metrifid-release-wheel-venv"
           TEST_CWD="$RUNNER_TEMP/metrifid-release-tests"
-          rm -rf "$RELEASE_VENV" "$TEST_CWD"
+          DEMO_CWD="$RUNNER_TEMP/metrifid-demo"
+          rm -rf "$RELEASE_VENV" "$TEST_CWD" "$DEMO_CWD"
           python -m venv "$RELEASE_VENV"
-          mkdir -p "$TEST_CWD"
-          "$RELEASE_VENV/bin/python" -m pip install "$GITHUB_WORKSPACE/dist/metrifid-0.2.1-py3-none-any.whl"
+          mkdir -p "$TEST_CWD" "$DEMO_CWD"
+          # The constraint is applied to the install that resolves NumPy, and the primary release
+          # runtime is pinned exactly, so the suite runs on the profile the project declares.
+          "$RELEASE_VENV/bin/python" -m pip install \
+            -c "$GITHUB_WORKSPACE/.github/quality-constraints.txt" \
+            "$GITHUB_WORKSPACE/dist/metrifid-${RELEASE_VERSION}-py3-none-any.whl" \
+            "mujoco==${PRIMARY_MUJOCO}"
+          # Every top-level import the complete suite performs must be supplied here, including
+          # pytest-check, which sixteen current test modules import at module scope.
           "$RELEASE_VENV/bin/python" -m pip install -c "$GITHUB_WORKSPACE/.github/quality-constraints.txt" \
-            build editables hatchling hypothesis mypy pytest pytest-randomly
+            build editables hatchling hypothesis mypy pytest pytest-check pytest-randomly
           "$RELEASE_VENV/bin/python" -m pip check
+          # Runtime identity is read from the interpreter that actually runs the suite.
+          "$RELEASE_VENV/bin/python" - <<'PY'
+          import importlib.metadata
+          import json
+          import os
+          import pathlib
+          import sys
+
+          import mujoco
+
+          runtime = {
+              "python": sys.version.split()[0],
+              "pytest": importlib.metadata.version("pytest"),
+              "numpy": importlib.metadata.version("numpy"),
+              "mujoco": importlib.metadata.version("mujoco"),
+              "mujoco_native_string": mujoco.mj_versionString(),
+              "mujoco_native_integer": mujoco.mj_version(),
+          }
+          expected = os.environ["PRIMARY_MUJOCO"]
+          if runtime["mujoco"] != expected:
+              raise SystemExit(f"suite runtime has MuJoCo {runtime['mujoco']}, not {expected}")
+          if runtime["mujoco_native_string"] != expected:
+              raise SystemExit(
+                  f"native MuJoCo string is {runtime['mujoco_native_string']!r}, not {expected!r}"
+              )
+          major, minor, patch = (int(part) for part in expected.split("."))
+          if runtime["mujoco_native_integer"] != major * 1_000_000 + minor * 1_000 + patch:
+              raise SystemExit(f"native MuJoCo integer disagrees: {runtime['mujoco_native_integer']}")
+          pathlib.Path(os.environ["SUITE_RUNTIME"]).write_text(
+              json.dumps(runtime, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+          )
+          print(json.dumps(runtime, sort_keys=True))
+          PY
+          for surface in "" certify compare audit-timestep review-model qualify-workload \
+              review-runtime run-runtime-review; do
+            if [ -z "$surface" ]; then
+              "$RELEASE_VENV/bin/metrifid" --help > /dev/null
+            else
+              "$RELEASE_VENV/bin/metrifid" "$surface" --help > /dev/null
+            fi
+          done
           cd "$TEST_CWD"
           PATH="$RELEASE_VENV/bin:$PATH" PYTHONPATH= \
-            "$RELEASE_VENV/bin/python" -m pytest -q \
-              --junitxml="$GITHUB_WORKSPACE/release-junit.xml" \
+            "$RELEASE_VENV/bin/python" -m pytest -q --junitxml="$JUNIT_REPORT" \
               "$GITHUB_WORKSPACE/tests"
           PATH="$RELEASE_VENV/bin:$PATH" PYTHONPATH= \
-            "$RELEASE_VENV/bin/python" "$GITHUB_WORKSPACE/tools/mjb_characterization.py" \
-              | tee "$GITHUB_WORKSPACE/mjb-characterization.log"
-          rm -rf "$RUNNER_TEMP/metrifid-demo"
-          mkdir -p "$RUNNER_TEMP/metrifid-demo"
-          cd "$RUNNER_TEMP/metrifid-demo"
+            "$RELEASE_VENV/bin/python" "$GITHUB_WORKSPACE/tools/mjb_characterization.py" > "$MJB_LOG"
+          cd "$DEMO_CWD"
           PATH="$RELEASE_VENV/bin:$PATH" PYTHONPATH= \
-            "$RELEASE_VENV/bin/python" -m metrifid.demo \
-              | tee "$GITHUB_WORKSPACE/demo.log"
+            "$RELEASE_VENV/bin/python" -m metrifid.demo > "$DEMO_LOG"
 
-      - name: Verify the complete release test contract
+      - name: Require the exact accepted skip set and nonempty required outputs
+        env:
+          JUNIT_REPORT: ${{ runner.temp }}/release-junit.xml
+          MJB_LOG: ${{ runner.temp }}/mjb-characterization.log
+          DEMO_LOG: ${{ runner.temp }}/demo.log
         run: |
+          set -euo pipefail
           python - <<'PY'
+          import os
+          import pathlib
           import xml.etree.ElementTree as ET
 
-          root = ET.parse("release-junit.xml").getroot()
+          # The observed total is whatever the run reported; a stored total goes stale. The skip set
+          # is pinned exactly, because a new, removed or renamed skip changes what the release proved.
+          ACCEPTED_SKIPS = {
+              "tests.integration.test_mujoco_model_identity_native::test_dependencies_contain_both_hfield_pngs",
+              "tests.integration.test_mujoco_model_identity_native::test_mujoco_compiles_official_scene",
+              "tests.integration.test_mujoco_model_identity_native::test_source_model_bytes_unchanged",
+              "tests.integration.test_mujoco_model_identity_native::test_official_scene_compiles_natively_and_is_admitted",
+              "tests.integration.test_mujoco_model_identity_native::test_scene_29dof_remains_admitted_and_unaffected",
+              "tests.integration.test_mujoco_model_identity_native::test_unrelated_checkout_xml_does_not_affect_the_dependency_result",
+              "tests.integration.test_mujoco_model_identity_native::test_existing_scene_29dof_path_still_works",
+              "tests.integration.test_mujoco_model_identity_native::test_every_dependency_is_a_contained_measured_member",
+              "tests.integration.test_mujoco_model_identity_native::test_same_role_model_pair_identity_for_scene",
+              "tests.integration.test_timestep_audit_native::test_bundled_real_policy_audit_reproduces_after_finalization",
+          }
+
+          root = ET.parse(os.environ["JUNIT_REPORT"]).getroot()
           cases = list(root.iter("testcase"))
-          skipped = [case for case in cases if case.find("skipped") is not None]
-          failed = [case for case in cases if case.find("failure") is not None]
-          errored = [case for case in cases if case.find("error") is not None]
-          assert len(cases) == 1372, len(cases)
-          assert len(skipped) == 10, len(skipped)
-          assert not failed, [case.attrib for case in failed]
-          assert not errored, [case.attrib for case in errored]
+          if not cases:
+              raise SystemExit("the installed-artifact suite reported no test cases")
+          failed = [case.attrib for case in cases if case.find("failure") is not None]
+          errored = [case.attrib for case in cases if case.find("error") is not None]
+          if failed or errored:
+              raise SystemExit(f"failures={failed} errors={errored}")
 
-          required_distribution_tests = {
-              "test_sdist_contains_every_documented_repository_path",
-              "test_direct_wheel_package_bytes_match_the_candidate_source",
-              "test_direct_and_rebuilt_wheels_carry_identical_package_members",
-              "test_direct_and_rebuilt_wheels_share_one_console_entry_point",
-              "test_direct_and_rebuilt_wheels_declare_semantically_equal_metadata",
-              "test_direct_and_rebuilt_wheels_carry_identical_license_and_typing_markers",
-              "test_distribution_metadata_identifies_license_and_owner",
-              "test_both_artifacts_report_the_numeric_release_version",
+          observed = {
+              f"{case.attrib.get('classname', '')}::{case.attrib.get('name', '')}"
+              for case in cases
+              if case.find("skipped") is not None
           }
-          for required_name in sorted(required_distribution_tests):
-              matches = [case for case in cases if case.attrib.get("name") == required_name]
-              assert len(matches) == 1, (required_name, [case.attrib for case in matches])
-              assert matches[0].find("skipped") is None, required_name
+          if observed != ACCEPTED_SKIPS:
+              missing = sorted(ACCEPTED_SKIPS - observed)
+              unexpected = sorted(observed - ACCEPTED_SKIPS)
+              raise SystemExit(f"skip set changed: missing={missing} unexpected={unexpected}")
+
+          for name in ("MJB_LOG", "DEMO_LOG"):
+              path = pathlib.Path(os.environ[name])
+              if not path.is_file() or not path.read_text(encoding="utf-8").strip():
+                  raise SystemExit(f"{name} is missing or empty: {path}")
+          print(f"observed {len(cases)} cases with exactly the {len(observed)} accepted skips")
           PY
 
-      - name: Rebuild wheel from source distribution
+      - name: Record the public-safe promotion manifest and checksums
+        env:
+          JUNIT_REPORT: ${{ runner.temp }}/release-junit.xml
+          SUITE_RUNTIME: ${{ runner.temp }}/suite-runtime.json
         run: |
-          rm -rf sdist-extract sdist-wheel
-          mkdir -p sdist-extract sdist-wheel
-          tar -xzf dist/metrifid-0.2.1.tar.gz -C sdist-extract
-          python -m build --wheel --outdir sdist-wheel sdist-extract/metrifid-0.2.1
-          cmp dist/metrifid-0.2.1-py3-none-any.whl sdist-wheel/metrifid-0.2.1-py3-none-any.whl
-
-      - name: Generate checksums and release evidence
-        run: |
-          sha256sum dist/metrifid-0.2.1-py3-none-any.whl dist/metrifid-0.2.1.tar.gz > SHA256SUMS.txt
+          set -euo pipefail
+          ( cd dist && sha256sum \
+              "metrifid-${RELEASE_VERSION}-py3-none-any.whl" \
+              "metrifid-${RELEASE_VERSION}.tar.gz" ) > SHA256SUMS.txt
+          test "$(wc -l < SHA256SUMS.txt | tr -d ' ')" = "2"
+          RUN_REPOSITORY="$GITHUB_REPOSITORY" RUN_COMMIT="$GITHUB_SHA" RUNNER_LABEL="$RUNNER_OS-$RUNNER_ARCH" \
           python - <<'PY'
-          import hashlib, json, pathlib, xml.etree.ElementTree as ET
-          root = ET.parse('release-junit.xml').getroot()
-          cases = list(root.iter('testcase'))
-          totals = {
-              'tests': len(cases),
-              'failures': sum(case.find('failure') is not None for case in cases),
-              'errors': sum(case.find('error') is not None for case in cases),
-              'skipped': sum(case.find('skipped') is not None for case in cases),
+          import hashlib
+          import importlib.metadata
+          import json
+          import os
+          import pathlib
+          import subprocess
+          import xml.etree.ElementTree as ET
+
+          # This file travels between jobs in a public repository, so it carries only durable,
+          # public-safe release facts. Runtime values come from the interpreter that ran the suite.
+          root = ET.parse(os.environ["JUNIT_REPORT"]).getroot()
+          cases = list(root.iter("testcase"))
+          suite = json.loads(pathlib.Path(os.environ["SUITE_RUNTIME"]).read_text(encoding="utf-8"))
+          tree = subprocess.run(
+              ["git", "rev-parse", "HEAD^{tree}"], capture_output=True, check=True, text=True
+          ).stdout.strip()
+          manifest = {
+              "schema_version": 4,
+              "project": "metrifid",
+              "version": os.environ["RELEASE_VERSION"],
+              "tag": os.environ["PLANNED_TAG"],
+              "mode": os.environ["RELEASE_MODE"],
+              "commit": os.environ["RUN_COMMIT"],
+              "tree": tree,
+              "repository": os.environ["RUN_REPOSITORY"],
+              "workflow_sha256": hashlib.sha256(
+                  pathlib.Path(".github/workflows/publish.yml").read_bytes()
+              ).hexdigest(),
+              "build": {
+                  "backend": "hatchling",
+                  "backend_version": importlib.metadata.version("hatchling"),
+                  "frontend_version": importlib.metadata.version("build"),
+                  "twine_version": importlib.metadata.version("twine"),
+                  "isolated": False,
+                  "runner": os.environ["RUNNER_LABEL"],
+              },
+              "suite_runtime": {
+                  "python": suite["python"],
+                  "pytest": suite["pytest"],
+                  "numpy": suite["numpy"],
+                  "mujoco": suite["mujoco"],
+                  "mujoco_native_string": suite["mujoco_native_string"],
+                  "mujoco_native_integer": suite["mujoco_native_integer"],
+              },
+              "artifacts": [
+                  {
+                      "filename": path.name,
+                      "size": path.stat().st_size,
+                      "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                  }
+                  for path in sorted(pathlib.Path("dist").iterdir())
+                  if path.is_file()
+              ],
+              "outcomes": {
+                  "observed_test_cases": len(cases),
+                  "pip_check": "passed",
+                  "help_surfaces": "passed",
+                  "demo": "passed",
+                  "mjb_characterization": "passed",
+              },
           }
-          evidence = {
-              'schema_version': 1,
-              'project': 'metrifid',
-              'version': '0.2.1',
-              'commit': '${{ github.sha }}',
-              'tag': '${{ github.ref_name }}',
-              'workflow_sha256': hashlib.sha256(pathlib.Path('.github/workflows/publish.yml').read_bytes()).hexdigest(),
-              'artifacts': [],
-              'tests': totals,
-              'mjb_characterization_passed': 'all 29 checks passed' in pathlib.Path('mjb-characterization.log').read_text(encoding='utf-8'),
-              'demo_passed': 'Metrifid demo passed' in pathlib.Path('demo.log').read_text(encoding='utf-8'),
-          }
-          for path in sorted(pathlib.Path('dist').iterdir()):
-              evidence['artifacts'].append({
-                  'filename': path.name,
-                  'size': path.stat().st_size,
-                  'sha256': hashlib.sha256(path.read_bytes()).hexdigest(),
-              })
-          assert evidence['tests'] == {
-              'tests': 1372,
-              'failures': 0,
-              'errors': 0,
-              'skipped': 10,
-          }, evidence['tests']
-          assert evidence['mjb_characterization_passed'] and evidence['demo_passed']
-          pathlib.Path('release-evidence.json').write_text(json.dumps(evidence, indent=2, sort_keys=True) + '\n', encoding='utf-8')
+          pathlib.Path("dist-promotion-manifest.json").write_text(
+              json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+          )
           PY
-          sed -n '/^## 0.2.1/,/^## 0.2.0/p' CHANGELOG.md | sed '$d' > RELEASE_NOTES.md
+          sed -n "/^## ${RELEASE_VERSION}\$/,/^## /p" CHANGELOG.md | sed '$d' > RELEASE_NOTES.md
+          test -s RELEASE_NOTES.md
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
@@ -169,426 +601,1287 @@ jobs:
           path: |
             dist/
             SHA256SUMS.txt
-            release-evidence.json
             RELEASE_NOTES.md
-            release-junit.xml
-            mjb-characterization.log
-            demo.log
+            dist-promotion-manifest.json
           if-no-files-found: error
+          retention-days: 1
 
-  check_testpypi_state:
-    name: check TestPyPI version state
-    needs: build-and-validate
-    runs-on: ubuntu-24.04
-    outputs:
-      upload: ${{ steps.index_state.outputs.upload }}
-    steps:
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
-        with:
-          name: ${{ env.RELEASE_ARTIFACT }}
-          path: release-artifacts
-      - name: Compare TestPyPI state with the exact release artifacts
-        id: index_state
-        env:
-          INDEX_JSON_URL: https://test.pypi.org/pypi/metrifid/0.2.1/json
-        run: |
-          python - <<'PY'
-          import hashlib, json, os, pathlib, urllib.error, urllib.request
-
-          expected = {
-              path.name: hashlib.sha256(path.read_bytes()).hexdigest()
-              for path in pathlib.Path('release-artifacts/dist').iterdir()
-              if path.is_file()
-          }
-          assert set(expected) == {'metrifid-0.2.1-py3-none-any.whl', 'metrifid-0.2.1.tar.gz'}, expected
-          try:
-              with urllib.request.urlopen(os.environ['INDEX_JSON_URL'], timeout=30) as response:
-                  value = json.load(response)
-          except urllib.error.HTTPError as exc:
-              if exc.code != 404:
-                  raise
-              upload = True
-          else:
-              observed = {row['filename']: row['digests']['sha256'] for row in value['urls']}
-              if observed != expected:
-                  raise SystemExit(f'TestPyPI already contains mismatched or incomplete files: {observed!r}')
-              upload = False
-          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as output:
-              output.write(f"upload={'true' if upload else 'false'}\n")
-          PY
-
-  publish_testpypi:
-    name: publish exact artifacts to TestPyPI
-    needs: check_testpypi_state
-    if: needs.check_testpypi_state.outputs.upload == 'true'
+  testpypi_publish:
+    name: publish to TestPyPI
+    needs: build_and_validate
+    if: ${{ inputs.mode == 'staged-release' }}
     runs-on: ubuntu-24.04
     environment:
       name: testpypi
       url: https://test.pypi.org/p/metrifid
     permissions:
+      contents: read
       id-token: write
     steps:
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.12"
+
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           name: ${{ env.RELEASE_ARTIFACT }}
           path: release-artifacts
+
+      - name: Decide the remote registry state
+        id: remote_state
+        env:
+          INDEX_JSON_URL: https://test.pypi.org/pypi/metrifid/${{ inputs.release_version }}/json
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import json
+          import os
+          import pathlib
+          import re
+          import urllib.error
+          import urllib.request
+
+          def exact_rows(payload, expected_names):
+              """Validate the index file list before any mapping collapses a duplicate row."""
+              if not isinstance(payload, dict):
+                  raise SystemExit("index response is not an object")
+              rows = payload.get("urls")
+              if not isinstance(rows, list):
+                  raise SystemExit("index response has no file list")
+              seen = {}
+              for row in rows:
+                  if not isinstance(row, dict):
+                      raise SystemExit("index row is not an object")
+                  name = row.get("filename")
+                  if not isinstance(name, str) or name not in expected_names:
+                      raise SystemExit(f"index row has an unexpected filename: {name!r}")
+                  if name in seen:
+                      raise SystemExit(f"index lists {name!r} more than once")
+                  digests = row.get("digests")
+                  if not isinstance(digests, dict):
+                      raise SystemExit(f"index row for {name!r} carries no digests")
+                  digest = digests.get("sha256")
+                  if not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+                      raise SystemExit(f"index row for {name!r} has a malformed digest")
+                  url = row.get("url")
+                  if not isinstance(url, str) or not url.startswith("https://"):
+                      raise SystemExit(f"index row for {name!r} has no https url")
+                  seen[name] = digest
+              return seen
+
+          # Only three states are valid: an explicit not-found permits one upload, exact equality is
+          # idempotent success, and anything else stops without uploading. No other failure is
+          # converted into absence.
+          root = pathlib.Path("release-artifacts")
+          manifest = json.loads((root / "dist-promotion-manifest.json").read_text(encoding="utf-8"))
+          expected = {row["filename"]: row["sha256"] for row in manifest["artifacts"]}
+          try:
+              with urllib.request.urlopen(os.environ["INDEX_JSON_URL"], timeout=30) as response:
+                  payload = json.load(response)
+          except urllib.error.HTTPError as error:
+              if error.code != 404:
+                  raise SystemExit(f"index lookup failed with HTTP {error.code}")
+              upload = True
+          else:
+              observed = exact_rows(payload, set(expected))
+              if observed != expected:
+                  raise SystemExit(
+                      f"the index already holds a different or incomplete state: {observed!r}"
+                  )
+              upload = False
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as handle:
+              handle.write(f"upload={'true' if upload else 'false'}\n")
+          print("upload" if upload else "already present with identical hashes")
+          PY
+
+      - name: Require public identity after approval
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          default_branch="$(gh api "repos/${GH_REPO}" --jq '.default_branch')"
+          test -n "$default_branch"
+          PUBLIC_MAIN_HEAD="$(gh api "repos/${GH_REPO}/commits/${default_branch}" --jq '.sha')"
+          REMOTE_TREE="$(gh api "repos/${GH_REPO}/commits/${EXPECTED_COMMIT}" --jq '.commit.tree.sha')"
+          REMOTE_WORKFLOW_B64="$(gh api "repos/${GH_REPO}/contents/.github/workflows/publish.yml?ref=${EXPECTED_COMMIT}" --jq '.content')"
+          REMOTE_WORKFLOW_ENCODING="$(gh api "repos/${GH_REPO}/contents/.github/workflows/publish.yml?ref=${EXPECTED_COMMIT}" --jq '.encoding')"
+          TAG_OBJECT_TYPE="$(gh api "repos/${GH_REPO}/git/ref/tags/${PLANNED_TAG}" --jq '.object.type')"
+          TAG_OBJECT_SHA="$(gh api "repos/${GH_REPO}/git/ref/tags/${PLANNED_TAG}" --jq '.object.sha')"
+          if [ "$TAG_OBJECT_TYPE" = "tag" ]; then
+            TAG_PEELED="$(gh api "repos/${GH_REPO}/git/tags/${TAG_OBJECT_SHA}" --jq '.object.sha')"
+            TAG_PEELED_TYPE="$(gh api "repos/${GH_REPO}/git/tags/${TAG_OBJECT_SHA}" --jq '.object.type')"
+          else
+            TAG_PEELED=""
+            TAG_PEELED_TYPE=""
+          fi
+          export PUBLIC_MAIN_HEAD REMOTE_TREE REMOTE_WORKFLOW_B64 REMOTE_WORKFLOW_ENCODING
+          export TAG_OBJECT_TYPE TAG_PEELED TAG_PEELED_TYPE
+          python - <<'PY'
+          import base64
+          import binascii
+          import hashlib
+          import json
+          import os
+          import pathlib
+          import re
+
+          # This is the last run step before the mutation, after the environment approval, so the
+          # owner may advance public main and create the annotated tag while the run waits here.
+          # Every value is compared against the public repository, never against another field of
+          # the same manifest.
+          root = pathlib.Path("release-artifacts")
+          version = os.environ["RELEASE_VERSION"]
+          tag = os.environ["PLANNED_TAG"]
+          expected = os.environ["EXPECTED_COMMIT"]
+          observed = os.environ["GITHUB_SHA"]
+
+          if not re.fullmatch(r"[0-9a-f]{40}", expected):
+              raise SystemExit(f"expected commit is not a full commit id: {expected!r}")
+          if expected != observed:
+              raise SystemExit(f"expected commit {expected!r} is not the run commit {observed!r}")
+
+          manifest = json.loads((root / "dist-promotion-manifest.json").read_text(encoding="utf-8"))
+          for field, value in (
+              ("commit", observed),
+              ("version", version),
+              ("tag", tag),
+              ("repository", os.environ["GITHUB_REPOSITORY"]),
+          ):
+              if manifest.get(field) != value:
+                  raise SystemExit(f"manifest {field} is {manifest.get(field)!r}, not {value!r}")
+
+          remote_tree = os.environ["REMOTE_TREE"]
+          if not re.fullmatch(r"[0-9a-f]{40}", remote_tree):
+              raise SystemExit(f"the public commit tree is not an object id: {remote_tree!r}")
+          if manifest.get("tree") != remote_tree:
+              raise SystemExit(
+                  f"manifest tree {manifest.get('tree')!r} is not the public tree {remote_tree!r}"
+              )
+          if os.environ["REMOTE_WORKFLOW_ENCODING"] != "base64":
+              raise SystemExit(
+                  "the public workflow content is not base64: "
+                  f"{os.environ['REMOTE_WORKFLOW_ENCODING']!r}"
+              )
+          # GitHub documents line separators inside its Base64 content. Only those are removed,
+          # and decoding is strict, so trailing garbage or bad padding cannot slip through.
+          encoded = os.environ["REMOTE_WORKFLOW_B64"].replace("\n", "")
+          if not encoded:
+              raise SystemExit("the public workflow content is empty")
+          try:
+              workflow_bytes = base64.b64decode(encoded, validate=True)
+          except (binascii.Error, ValueError) as error:
+              raise SystemExit(f"the public workflow content is not decodable: {error}") from error
+          if not workflow_bytes:
+              raise SystemExit("the public workflow content is empty")
+          remote_workflow = hashlib.sha256(workflow_bytes).hexdigest()
+          if manifest.get("workflow_sha256") != remote_workflow:
+              raise SystemExit(
+                  f"manifest workflow digest {manifest.get('workflow_sha256')!r} is not the public "
+                  f"workflow digest {remote_workflow!r}"
+              )
+
+          if os.environ["PUBLIC_MAIN_HEAD"] != observed:
+              raise SystemExit(
+                  f"public default branch head {os.environ['PUBLIC_MAIN_HEAD']!r} is not {observed!r}"
+              )
+          if os.environ["TAG_OBJECT_TYPE"] != "tag":
+              raise SystemExit(
+                  f"tag {tag!r} is not an annotated tag object: {os.environ['TAG_OBJECT_TYPE']!r}"
+              )
+          if os.environ["TAG_PEELED_TYPE"] != "commit":
+              raise SystemExit(f"tag {tag!r} does not peel to a commit object")
+          if os.environ["TAG_PEELED"] != observed:
+              raise SystemExit(
+                  f"annotated tag peels to {os.environ['TAG_PEELED']!r}, not {observed!r}"
+              )
+
+          expected_names = {
+              f"metrifid-{version}-py3-none-any.whl",
+              f"metrifid-{version}.tar.gz",
+          }
+          stored = {row["filename"]: row for row in manifest["artifacts"]}
+          if set(stored) != expected_names:
+              raise SystemExit(f"manifest does not describe the release pair: {sorted(stored)}")
+          present = sorted(path.name for path in (root / "dist").iterdir() if path.is_file())
+          if present != sorted(expected_names):
+              raise SystemExit(f"distribution directory is not exactly the pair: {present}")
+          lines = (root / "SHA256SUMS.txt").read_text(encoding="utf-8").splitlines()
+          if len(lines) != 2:
+              raise SystemExit(f"SHA256SUMS.txt must hold exactly two lines, got {len(lines)}")
+          checksums = {}
+          for line in lines:
+              digest, _, name = line.partition("  ")
+              checksums[name] = digest
+          for name, row in stored.items():
+              blob = (root / "dist" / name).read_bytes()
+              if hashlib.sha256(blob).hexdigest() != row["sha256"]:
+                  raise SystemExit(f"{name} does not match the stored hash")
+              if len(blob) != row["size"]:
+                  raise SystemExit(f"{name} does not match the stored size")
+              if checksums.get(name) != row["sha256"]:
+                  raise SystemExit(f"SHA256SUMS.txt does not describe {name}")
+          print("public identity and stored bytes agree")
+          PY
+
       - name: Publish to TestPyPI
+        if: ${{ steps.remote_state.outputs.upload == 'true' }}
         uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
         with:
           packages-dir: release-artifacts/dist/
           repository-url: https://test.pypi.org/legacy/
 
-  verify_testpypi:
+  testpypi_verify:
     name: verify TestPyPI publication
-    needs: [check_testpypi_state, publish_testpypi]
-    if: ${{ always() && needs.check_testpypi_state.result == 'success' && (needs.publish_testpypi.result == 'success' || needs.publish_testpypi.result == 'skipped') }}
+    needs: testpypi_publish
+    if: ${{ inputs.mode == 'staged-release' }}
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: "3.12"
+
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           name: ${{ env.RELEASE_ARTIFACT }}
           path: release-artifacts
-      - name: Verify TestPyPI hashes and installation
-        run: |
-          python - <<'PY'
-          import hashlib, json, pathlib, time, urllib.request
 
-          expected_paths = {
-              path.name: path
-              for path in pathlib.Path('release-artifacts/dist').iterdir()
-              if path.is_file()
-          }
-          expected = {name: hashlib.sha256(path.read_bytes()).hexdigest() for name, path in expected_paths.items()}
-          url = 'https://test.pypi.org/pypi/metrifid/0.2.1/json'
-          for _ in range(90):
-              try:
-                  with urllib.request.urlopen(url, timeout=20) as response:
-                      data = json.load(response)
-                  rows = {row['filename']: row for row in data['urls']}
-                  observed = {name: row['digests']['sha256'] for name, row in rows.items()}
-                  if observed == expected:
-                      break
-              except Exception:
-                  pass
-              time.sleep(10)
-          else:
-              raise SystemExit('TestPyPI artifacts or hashes did not match within 15 minutes')
-          download = pathlib.Path('testpypi-download')
-          download.mkdir()
-          for name, row in rows.items():
-              target = download / name
-              with urllib.request.urlopen(row['url'], timeout=60) as response:
-                  target.write_bytes(response.read())
-              if hashlib.sha256(target.read_bytes()).hexdigest() != expected[name]:
-                  raise SystemExit(f'TestPyPI downloaded bytes differ for {name}')
-          PY
-          TESTPYPI_VENV="$RUNNER_TEMP/metrifid-testpypi-venv"
-          rm -rf "$TESTPYPI_VENV"
-          python -m venv "$TESTPYPI_VENV"
-          "$TESTPYPI_VENV/bin/python" -m pip install testpypi-download/metrifid-0.2.1-py3-none-any.whl
-          "$TESTPYPI_VENV/bin/python" -m pip check
-          "$TESTPYPI_VENV/bin/metrifid" --help
-          "$TESTPYPI_VENV/bin/metrifid" certify --help
-          "$TESTPYPI_VENV/bin/metrifid" compare --help
-          "$TESTPYPI_VENV/bin/metrifid" audit-timestep --help
-          "$TESTPYPI_VENV/bin/python" - <<'PY'
-          import metrifid
-          from metrifid.certify import certify_models, load_and_validate_certification_receipt
-          from metrifid.compare import compare_configuration_file
-          from metrifid.timestep_audit import audit_configuration_file
-          assert metrifid.__version__ == '0.2.1'
-          assert callable(certify_models)
-          assert callable(load_and_validate_certification_receipt)
-          assert callable(compare_configuration_file)
-          assert callable(audit_configuration_file)
-          PY
-          rm -rf "$RUNNER_TEMP/metrifid-testpypi-demo"
-          mkdir -p "$RUNNER_TEMP/metrifid-testpypi-demo"
-          cd "$RUNNER_TEMP/metrifid-testpypi-demo"
-          "$TESTPYPI_VENV/bin/python" -m metrifid.demo
-
-  prepare_github_release:
-    name: prepare GitHub draft release
-    needs: verify_testpypi
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: write
-    env:
-      GH_TOKEN: ${{ github.token }}
-      GH_REPO: ${{ github.repository }}
-    steps:
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
-        with:
-          python-version: "3.12"
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
-        with:
-          name: ${{ env.RELEASE_ARTIFACT }}
-          path: release-artifacts
-      - name: Create or verify the draft GitHub release
+      - name: Poll the index and download both files
+        env:
+          INDEX_JSON_URL: https://test.pypi.org/pypi/metrifid/${{ inputs.release_version }}/json
         run: |
           set -euo pipefail
-          RELEASE_JSON="$RUNNER_TEMP/metrifid-release-before-pypi.json"
-          RELEASE_ERROR="$RUNNER_TEMP/metrifid-release-before-pypi.err"
-          if gh release view "$RELEASE_VERSION" \
-            --repo "$GH_REPO" \
-            --json tagName,isDraft,isPrerelease,name,body > "$RELEASE_JSON" 2> "$RELEASE_ERROR"; then
-            echo "GitHub release already exists; identity and assets will be verified"
-          else
-            if ! grep -Eqi "release not found|HTTP 404|not found" "$RELEASE_ERROR"; then
-              cat "$RELEASE_ERROR" >&2
-              exit 1
-            fi
-            gh release create "$RELEASE_VERSION" \
-              release-artifacts/dist/metrifid-0.2.1-py3-none-any.whl \
-              release-artifacts/dist/metrifid-0.2.1.tar.gz \
-              release-artifacts/SHA256SUMS.txt \
-              release-artifacts/release-evidence.json \
-              --repo "$GH_REPO" \
-              --draft \
-              --verify-tag \
-              --title "Metrifid 0.2.1" \
-              --notes-file release-artifacts/RELEASE_NOTES.md
-            gh release view "$RELEASE_VERSION" \
-              --repo "$GH_REPO" \
-              --json tagName,isDraft,isPrerelease,name,body > "$RELEASE_JSON"
-          fi
-          RELEASE_JSON="$RELEASE_JSON" python - <<'PY'
-          import json, os, pathlib
-
-          release = json.loads(pathlib.Path(os.environ['RELEASE_JSON']).read_text(encoding='utf-8'))
-          notes = pathlib.Path('release-artifacts/RELEASE_NOTES.md').read_text(encoding='utf-8')
-          assert release['tagName'] == '0.2.1', release
-          assert release['name'] == 'Metrifid 0.2.1', release
-          assert release['body'].strip() == notes.strip(), release
-          assert release['isPrerelease'] is False, release
-          assert isinstance(release['isDraft'], bool), release
-          PY
-          rm -rf "$RUNNER_TEMP/metrifid-draft-release-assets"
-          mkdir -p "$RUNNER_TEMP/metrifid-draft-release-assets"
-          gh release download "$RELEASE_VERSION" \
-            --repo "$GH_REPO" \
-            --dir "$RUNNER_TEMP/metrifid-draft-release-assets"
-          RELEASE_ASSETS="$RUNNER_TEMP/metrifid-draft-release-assets" python - <<'PY'
-          import hashlib, os, pathlib
-
-          expected_names = {
-              'metrifid-0.2.1-py3-none-any.whl',
-              'metrifid-0.2.1.tar.gz',
-              'SHA256SUMS.txt',
-              'release-evidence.json',
-          }
-          expected = {}
-          for path in pathlib.Path('release-artifacts').rglob('*'):
-              if path.is_file() and path.name in expected_names:
-                  expected[path.name] = hashlib.sha256(path.read_bytes()).hexdigest()
-          observed_dir = pathlib.Path(os.environ['RELEASE_ASSETS'])
-          observed = {
-              path.name: hashlib.sha256(path.read_bytes()).hexdigest()
-              for path in observed_dir.iterdir()
-              if path.is_file()
-          }
-          assert set(expected) == expected_names, expected
-          assert observed == expected, (observed, expected)
-          PY
-
-  check_pypi_state:
-    name: check PyPI version state
-    needs: prepare_github_release
-    runs-on: ubuntu-24.04
-    outputs:
-      upload: ${{ steps.index_state.outputs.upload }}
-    steps:
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
-        with:
-          name: ${{ env.RELEASE_ARTIFACT }}
-          path: release-artifacts
-      - name: Compare PyPI state with the exact release artifacts
-        id: index_state
-        env:
-          INDEX_JSON_URL: https://pypi.org/pypi/metrifid/0.2.1/json
-        run: |
           python - <<'PY'
-          import hashlib, json, os, pathlib, urllib.error, urllib.request
+          import hashlib
+          import json
+          import os
+          import pathlib
+          import re
+          import time
+          import urllib.error
+          import urllib.request
 
-          expected = {
-              path.name: hashlib.sha256(path.read_bytes()).hexdigest()
-              for path in pathlib.Path('release-artifacts/dist').iterdir()
-              if path.is_file()
-          }
-          assert set(expected) == {'metrifid-0.2.1-py3-none-any.whl', 'metrifid-0.2.1.tar.gz'}, expected
-          try:
-              with urllib.request.urlopen(os.environ['INDEX_JSON_URL'], timeout=30) as response:
-                  value = json.load(response)
-          except urllib.error.HTTPError as exc:
-              if exc.code != 404:
-                  raise
-              upload = True
-          else:
-              observed = {row['filename']: row['digests']['sha256'] for row in value['urls']}
-              if observed != expected:
-                  raise SystemExit(f'PyPI already contains mismatched or incomplete files: {observed!r}')
-              upload = False
-          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as output:
-              output.write(f"upload={'true' if upload else 'false'}\n")
+          def exact_rows(payload, expected_names):
+              """Validate the index file list before any mapping collapses a duplicate row."""
+              if not isinstance(payload, dict):
+                  raise SystemExit("index response is not an object")
+              rows = payload.get("urls")
+              if not isinstance(rows, list):
+                  raise SystemExit("index response has no file list")
+              seen = {}
+              for row in rows:
+                  if not isinstance(row, dict):
+                      raise SystemExit("index row is not an object")
+                  name = row.get("filename")
+                  if not isinstance(name, str) or name not in expected_names:
+                      raise SystemExit(f"index row has an unexpected filename: {name!r}")
+                  if name in seen:
+                      raise SystemExit(f"index lists {name!r} more than once")
+                  digests = row.get("digests")
+                  if not isinstance(digests, dict):
+                      raise SystemExit(f"index row for {name!r} carries no digests")
+                  digest = digests.get("sha256")
+                  if not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+                      raise SystemExit(f"index row for {name!r} has a malformed digest")
+                  url = row.get("url")
+                  if not isinstance(url, str) or not url.startswith("https://"):
+                      raise SystemExit(f"index row for {name!r} has no https url")
+                  seen[name] = digest
+              return seen
+
+          # Index propagation is ordinary, so poll for a bounded period rather than failing on the
+          # first miss. Only an explicit not-found is a reason to keep waiting; every other failure
+          # is reported immediately, so a rerun is safe and a real fault is never hidden.
+          root = pathlib.Path("release-artifacts")
+          manifest = json.loads((root / "dist-promotion-manifest.json").read_text(encoding="utf-8"))
+          expected = {row["filename"]: row["sha256"] for row in manifest["artifacts"]}
+          deadline = time.monotonic() + 300
+          last = "no response yet"
+          payload: dict[str, object] = {}
+          while True:
+              try:
+                  with urllib.request.urlopen(os.environ["INDEX_JSON_URL"], timeout=30) as response:
+                      payload = json.load(response)
+                  # A malformed, extra or duplicated row is immutable and unsafe, so exact_rows
+                  # raises rather than letting the deadline expire on a state that cannot heal.
+                  observed = exact_rows(payload, set(expected))
+                  if observed == expected:
+                      break
+                  wrong = sorted(n for n, d in observed.items() if expected[n] != d)
+                  if wrong:
+                      raise SystemExit(f"the index holds a different digest for {wrong}")
+                  # Only a correct subset of the expected pair is ordinary propagation.
+                  last = f"index is still missing {sorted(set(expected) - set(observed))}"
+              except urllib.error.HTTPError as error:
+                  if error.code != 404:
+                      raise SystemExit(f"index lookup failed with HTTP {error.code}")
+                  last = "index reports 404"
+              if time.monotonic() >= deadline:
+                  raise SystemExit(f"timed out waiting for the index; last observed: {last}")
+              time.sleep(15)
+
+          target = pathlib.Path("downloaded")
+          target.mkdir(exist_ok=True)
+          for row in payload["urls"]:
+              with urllib.request.urlopen(row["url"], timeout=60) as response:
+                  body = response.read()
+              if hashlib.sha256(body).hexdigest() != expected[row["filename"]]:
+                  raise SystemExit(f"downloaded {row['filename']} does not match the original")
+              if body != (root / "dist" / row["filename"]).read_bytes():
+                  raise SystemExit(f"downloaded {row['filename']} is not byte-identical")
+              (target / row["filename"]).write_bytes(body)
+          print("both remote files are byte-identical to the originals")
           PY
 
-  publish_pypi:
-    name: publish the same artifacts to PyPI
-    needs: check_pypi_state
-    if: needs.check_pypi_state.outputs.upload == 'true'
+      - name: Install the downloaded wheel and run the public journeys
+        run: |
+          set -euo pipefail
+          STAGE_VENV="$RUNNER_TEMP/metrifid-testpypi-venv"
+          rm -rf "$STAGE_VENV"
+          python -m venv "$STAGE_VENV"
+          "$STAGE_VENV/bin/python" -m pip install \
+            "downloaded/metrifid-${RELEASE_VERSION}-py3-none-any.whl"
+          "$STAGE_VENV/bin/python" -m pip check
+          test "$("$STAGE_VENV/bin/python" -c 'import metrifid; print(metrifid.__version__)')" \
+            = "${RELEASE_VERSION}"
+          for surface in "" certify compare audit-timestep review-model qualify-workload \
+              review-runtime run-runtime-review; do
+            if [ -z "$surface" ]; then
+              "$STAGE_VENV/bin/metrifid" --help > /dev/null
+            else
+              "$STAGE_VENV/bin/metrifid" "$surface" --help > /dev/null
+            fi
+          done
+          JOURNEY="$RUNNER_TEMP/metrifid-testpypi-journey"
+          rm -rf "$JOURNEY"; mkdir -p "$JOURNEY"
+          cd "$JOURNEY"
+          PATH="$STAGE_VENV/bin:$PATH" PYTHONPATH= "$STAGE_VENV/bin/python" -m metrifid.demo > /dev/null
+          PATH="$STAGE_VENV/bin:$PATH" PYTHONPATH= "$STAGE_VENV/bin/python" - <<'PY'
+          import pathlib
+          import subprocess
+
+          # One deterministic product journey through the installed console script: two source
+          # spellings that compile to one artifact must certify, and the receipt must be published.
+          baseline = pathlib.Path("baseline.xml")
+          candidate = pathlib.Path("candidate.xml")
+          baseline.write_text(
+              '<mujoco model="journey">\n'
+              "  <worldbody>\n"
+              '    <body name="arm" pos="0 0 1">\n'
+              '      <geom name="link" type="capsule" size="0.04 0.2" mass="1.5"/>\n'
+              '      <joint name="shoulder" type="hinge" axis="0 1 0"/>\n'
+              "    </body>\n"
+              "  </worldbody>\n"
+              "</mujoco>\n",
+              encoding="utf-8",
+          )
+          candidate.write_text(
+              '<mujoco model="journey">\n'
+              "  <worldbody>\n"
+              '    <body pos="0 0 1" name="arm">\n'
+              '      <geom mass="1.5" name="link" size="0.04 0.2" type="capsule"/>\n'
+              '      <joint axis="0 1 0" name="shoulder" type="hinge"/>\n'
+              "    </body>\n"
+              "  </worldbody>\n"
+              "</mujoco>\n",
+              encoding="utf-8",
+          )
+          done = subprocess.run(
+              ["metrifid", "certify", str(baseline), str(candidate), "--output", "receipt"],
+              capture_output=True,
+              text=True,
+          )
+          if done.returncode != 0:
+              raise SystemExit(f"certify journey exited {done.returncode}: {done.stderr}")
+          published = sorted(path.name for path in pathlib.Path("receipt").rglob("*") if path.is_file())
+          if not published:
+              raise SystemExit("certify journey published no receipt")
+          print(f"certify journey published {len(published)} receipt files")
+          PY
+
+  pypi_publish:
+    name: publish to PyPI
+    needs: testpypi_verify
+    if: ${{ inputs.mode == 'staged-release' }}
     runs-on: ubuntu-24.04
     environment:
       name: pypi
       url: https://pypi.org/p/metrifid
     permissions:
+      contents: read
       id-token: write
-    steps:
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
-        with:
-          name: ${{ env.RELEASE_ARTIFACT }}
-          path: release-artifacts
-      - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
-        with:
-          packages-dir: release-artifacts/dist/
-
-  verify_pypi_and_finalize_release:
-    name: verify PyPI and publish GitHub release
-    needs: [prepare_github_release, check_pypi_state, publish_pypi]
-    if: ${{ always() && needs.prepare_github_release.result == 'success' && needs.check_pypi_state.result == 'success' && (needs.publish_pypi.result == 'success' || needs.publish_pypi.result == 'skipped') }}
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: write
-    env:
-      GH_TOKEN: ${{ github.token }}
-      GH_REPO: ${{ github.repository }}
     steps:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: "3.12"
+
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           name: ${{ env.RELEASE_ARTIFACT }}
           path: release-artifacts
-      - name: Verify production PyPI hashes and anonymous installation
-        run: |
-          python - <<'PY'
-          import hashlib, json, pathlib, time, urllib.request
 
-          expected_paths = {
-              path.name: path
-              for path in pathlib.Path('release-artifacts/dist').iterdir()
-              if path.is_file()
-          }
-          expected = {name: hashlib.sha256(path.read_bytes()).hexdigest() for name, path in expected_paths.items()}
-          url = 'https://pypi.org/pypi/metrifid/0.2.1/json'
-          for _ in range(90):
-              try:
-                  with urllib.request.urlopen(url, timeout=20) as response:
-                      data = json.load(response)
-                  rows = {row['filename']: row for row in data['urls']}
-                  observed = {name: row['digests']['sha256'] for name, row in rows.items()}
-                  if observed == expected:
-                      break
-              except Exception:
-                  pass
-              time.sleep(10)
-          else:
-              raise SystemExit('PyPI artifacts or hashes did not match within 15 minutes')
-          download = pathlib.Path('pypi-download')
-          download.mkdir()
-          for name, row in rows.items():
-              target = download / name
-              with urllib.request.urlopen(row['url'], timeout=60) as response:
-                  target.write_bytes(response.read())
-              if hashlib.sha256(target.read_bytes()).hexdigest() != expected[name]:
-                  raise SystemExit(f'PyPI downloaded bytes differ for {name}')
-          PY
-          PUBLIC_VENV="$RUNNER_TEMP/metrifid-public-venv"
-          rm -rf "$PUBLIC_VENV"
-          python -m venv "$PUBLIC_VENV"
-          "$PUBLIC_VENV/bin/python" -m pip install --no-cache-dir metrifid==0.2.1
-          "$PUBLIC_VENV/bin/python" -m pip check
-          "$PUBLIC_VENV/bin/metrifid" --help
-          "$PUBLIC_VENV/bin/metrifid" certify --help
-          "$PUBLIC_VENV/bin/metrifid" compare --help
-          "$PUBLIC_VENV/bin/metrifid" audit-timestep --help
-          "$PUBLIC_VENV/bin/python" - <<'PY'
-          import metrifid
-          from metrifid.certify import certify_models, load_and_validate_certification_receipt
-          from metrifid.compare import compare_configuration_file
-          from metrifid.timestep_audit import audit_configuration_file
-          assert metrifid.__version__ == '0.2.1'
-          assert callable(certify_models)
-          assert callable(load_and_validate_certification_receipt)
-          assert callable(compare_configuration_file)
-          assert callable(audit_configuration_file)
-          PY
-          rm -rf "$RUNNER_TEMP/metrifid-public-demo"
-          mkdir -p "$RUNNER_TEMP/metrifid-public-demo"
-          cd "$RUNNER_TEMP/metrifid-public-demo"
-          "$PUBLIC_VENV/bin/python" -m metrifid.demo
-      - name: Publish or verify the GitHub release
+      - name: Decide the remote registry state
+        id: remote_state
+        env:
+          INDEX_JSON_URL: https://pypi.org/pypi/metrifid/${{ inputs.release_version }}/json
         run: |
           set -euo pipefail
-          RELEASE_JSON="$RUNNER_TEMP/metrifid-release-after-pypi.json"
-          gh release view "$RELEASE_VERSION" \
-            --repo "$GH_REPO" \
-            --json tagName,isDraft,isPrerelease,name,body > "$RELEASE_JSON"
-          DRAFT=$(RELEASE_JSON="$RELEASE_JSON" python - <<'PY'
-          import json, os, pathlib
-          release = json.loads(pathlib.Path(os.environ['RELEASE_JSON']).read_text(encoding='utf-8'))
-          notes = pathlib.Path('release-artifacts/RELEASE_NOTES.md').read_text(encoding='utf-8')
-          assert release['tagName'] == '0.2.1', release
-          assert release['name'] == 'Metrifid 0.2.1', release
-          assert release['body'].strip() == notes.strip(), release
-          assert release['isPrerelease'] is False, release
-          print('true' if release['isDraft'] else 'false')
+          python - <<'PY'
+          import json
+          import os
+          import pathlib
+          import re
+          import urllib.error
+          import urllib.request
+
+          def exact_rows(payload, expected_names):
+              """Validate the index file list before any mapping collapses a duplicate row."""
+              if not isinstance(payload, dict):
+                  raise SystemExit("index response is not an object")
+              rows = payload.get("urls")
+              if not isinstance(rows, list):
+                  raise SystemExit("index response has no file list")
+              seen = {}
+              for row in rows:
+                  if not isinstance(row, dict):
+                      raise SystemExit("index row is not an object")
+                  name = row.get("filename")
+                  if not isinstance(name, str) or name not in expected_names:
+                      raise SystemExit(f"index row has an unexpected filename: {name!r}")
+                  if name in seen:
+                      raise SystemExit(f"index lists {name!r} more than once")
+                  digests = row.get("digests")
+                  if not isinstance(digests, dict):
+                      raise SystemExit(f"index row for {name!r} carries no digests")
+                  digest = digests.get("sha256")
+                  if not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+                      raise SystemExit(f"index row for {name!r} has a malformed digest")
+                  url = row.get("url")
+                  if not isinstance(url, str) or not url.startswith("https://"):
+                      raise SystemExit(f"index row for {name!r} has no https url")
+                  seen[name] = digest
+              return seen
+
+          root = pathlib.Path("release-artifacts")
+          manifest = json.loads((root / "dist-promotion-manifest.json").read_text(encoding="utf-8"))
+          expected = {row["filename"]: row["sha256"] for row in manifest["artifacts"]}
+          try:
+              with urllib.request.urlopen(os.environ["INDEX_JSON_URL"], timeout=30) as response:
+                  payload = json.load(response)
+          except urllib.error.HTTPError as error:
+              if error.code != 404:
+                  raise SystemExit(f"index lookup failed with HTTP {error.code}")
+              upload = True
+          else:
+              observed = exact_rows(payload, set(expected))
+              if observed != expected:
+                  raise SystemExit(
+                      f"the index already holds a different or incomplete state: {observed!r}"
+                  )
+              upload = False
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as handle:
+              handle.write(f"upload={'true' if upload else 'false'}\n")
+          print("upload" if upload else "already present with identical hashes")
           PY
-          )
-          if [ "$DRAFT" = "true" ]; then
-            gh release edit "$RELEASE_VERSION" --repo "$GH_REPO" --draft=false
+
+      - name: Require public identity after approval
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          default_branch="$(gh api "repos/${GH_REPO}" --jq '.default_branch')"
+          test -n "$default_branch"
+          PUBLIC_MAIN_HEAD="$(gh api "repos/${GH_REPO}/commits/${default_branch}" --jq '.sha')"
+          REMOTE_TREE="$(gh api "repos/${GH_REPO}/commits/${EXPECTED_COMMIT}" --jq '.commit.tree.sha')"
+          REMOTE_WORKFLOW_B64="$(gh api "repos/${GH_REPO}/contents/.github/workflows/publish.yml?ref=${EXPECTED_COMMIT}" --jq '.content')"
+          REMOTE_WORKFLOW_ENCODING="$(gh api "repos/${GH_REPO}/contents/.github/workflows/publish.yml?ref=${EXPECTED_COMMIT}" --jq '.encoding')"
+          TAG_OBJECT_TYPE="$(gh api "repos/${GH_REPO}/git/ref/tags/${PLANNED_TAG}" --jq '.object.type')"
+          TAG_OBJECT_SHA="$(gh api "repos/${GH_REPO}/git/ref/tags/${PLANNED_TAG}" --jq '.object.sha')"
+          if [ "$TAG_OBJECT_TYPE" = "tag" ]; then
+            TAG_PEELED="$(gh api "repos/${GH_REPO}/git/tags/${TAG_OBJECT_SHA}" --jq '.object.sha')"
+            TAG_PEELED_TYPE="$(gh api "repos/${GH_REPO}/git/tags/${TAG_OBJECT_SHA}" --jq '.object.type')"
+          else
+            TAG_PEELED=""
+            TAG_PEELED_TYPE=""
           fi
-          gh release view "$RELEASE_VERSION" \
-            --repo "$GH_REPO" \
-            --json tagName,isDraft,isPrerelease,name,body > "$RELEASE_JSON"
-          RELEASE_JSON="$RELEASE_JSON" python - <<'PY'
-          import json, os, pathlib
-          release = json.loads(pathlib.Path(os.environ['RELEASE_JSON']).read_text(encoding='utf-8'))
-          notes = pathlib.Path('release-artifacts/RELEASE_NOTES.md').read_text(encoding='utf-8')
-          assert release['tagName'] == '0.2.1', release
-          assert release['name'] == 'Metrifid 0.2.1', release
-          assert release['body'].strip() == notes.strip(), release
-          assert release['isDraft'] is False, release
-          assert release['isPrerelease'] is False, release
-          PY
-          rm -rf "$RUNNER_TEMP/metrifid-release-assets"
-          mkdir -p "$RUNNER_TEMP/metrifid-release-assets"
-          gh release download "$RELEASE_VERSION" \
-            --repo "$GH_REPO" \
-            --dir "$RUNNER_TEMP/metrifid-release-assets"
-          RELEASE_ASSETS="$RUNNER_TEMP/metrifid-release-assets" python - <<'PY'
-          import hashlib, os, pathlib
+          export PUBLIC_MAIN_HEAD REMOTE_TREE REMOTE_WORKFLOW_B64 REMOTE_WORKFLOW_ENCODING
+          export TAG_OBJECT_TYPE TAG_PEELED TAG_PEELED_TYPE
+          python - <<'PY'
+          import base64
+          import binascii
+          import hashlib
+          import json
+          import os
+          import pathlib
+          import re
+
+          root = pathlib.Path("release-artifacts")
+          version = os.environ["RELEASE_VERSION"]
+          tag = os.environ["PLANNED_TAG"]
+          expected = os.environ["EXPECTED_COMMIT"]
+          observed = os.environ["GITHUB_SHA"]
+
+          if not re.fullmatch(r"[0-9a-f]{40}", expected):
+              raise SystemExit(f"expected commit is not a full commit id: {expected!r}")
+          if expected != observed:
+              raise SystemExit(f"expected commit {expected!r} is not the run commit {observed!r}")
+
+          manifest = json.loads((root / "dist-promotion-manifest.json").read_text(encoding="utf-8"))
+          for field, value in (
+              ("commit", observed),
+              ("version", version),
+              ("tag", tag),
+              ("repository", os.environ["GITHUB_REPOSITORY"]),
+          ):
+              if manifest.get(field) != value:
+                  raise SystemExit(f"manifest {field} is {manifest.get(field)!r}, not {value!r}")
+
+          remote_tree = os.environ["REMOTE_TREE"]
+          if not re.fullmatch(r"[0-9a-f]{40}", remote_tree):
+              raise SystemExit(f"the public commit tree is not an object id: {remote_tree!r}")
+          if manifest.get("tree") != remote_tree:
+              raise SystemExit(
+                  f"manifest tree {manifest.get('tree')!r} is not the public tree {remote_tree!r}"
+              )
+          if os.environ["REMOTE_WORKFLOW_ENCODING"] != "base64":
+              raise SystemExit(
+                  "the public workflow content is not base64: "
+                  f"{os.environ['REMOTE_WORKFLOW_ENCODING']!r}"
+              )
+          # GitHub documents line separators inside its Base64 content. Only those are removed,
+          # and decoding is strict, so trailing garbage or bad padding cannot slip through.
+          encoded = os.environ["REMOTE_WORKFLOW_B64"].replace("\n", "")
+          if not encoded:
+              raise SystemExit("the public workflow content is empty")
+          try:
+              workflow_bytes = base64.b64decode(encoded, validate=True)
+          except (binascii.Error, ValueError) as error:
+              raise SystemExit(f"the public workflow content is not decodable: {error}") from error
+          if not workflow_bytes:
+              raise SystemExit("the public workflow content is empty")
+          remote_workflow = hashlib.sha256(workflow_bytes).hexdigest()
+          if manifest.get("workflow_sha256") != remote_workflow:
+              raise SystemExit(
+                  f"manifest workflow digest {manifest.get('workflow_sha256')!r} is not the public "
+                  f"workflow digest {remote_workflow!r}"
+              )
+
+          if os.environ["PUBLIC_MAIN_HEAD"] != observed:
+              raise SystemExit(
+                  f"public default branch head {os.environ['PUBLIC_MAIN_HEAD']!r} is not {observed!r}"
+              )
+          if os.environ["TAG_OBJECT_TYPE"] != "tag":
+              raise SystemExit(
+                  f"tag {tag!r} is not an annotated tag object: {os.environ['TAG_OBJECT_TYPE']!r}"
+              )
+          if os.environ["TAG_PEELED_TYPE"] != "commit":
+              raise SystemExit(f"tag {tag!r} does not peel to a commit object")
+          if os.environ["TAG_PEELED"] != observed:
+              raise SystemExit(
+                  f"annotated tag peels to {os.environ['TAG_PEELED']!r}, not {observed!r}"
+              )
 
           expected_names = {
-              'metrifid-0.2.1-py3-none-any.whl',
-              'metrifid-0.2.1.tar.gz',
-              'SHA256SUMS.txt',
-              'release-evidence.json',
+              f"metrifid-{version}-py3-none-any.whl",
+              f"metrifid-{version}.tar.gz",
           }
-          expected = {}
-          for path in pathlib.Path('release-artifacts').rglob('*'):
-              if path.is_file() and path.name in expected_names:
-                  expected[path.name] = hashlib.sha256(path.read_bytes()).hexdigest()
-          observed_dir = pathlib.Path(os.environ['RELEASE_ASSETS'])
-          observed = {
-              path.name: hashlib.sha256(path.read_bytes()).hexdigest()
-              for path in observed_dir.iterdir()
-              if path.is_file()
+          stored = {row["filename"]: row for row in manifest["artifacts"]}
+          if set(stored) != expected_names:
+              raise SystemExit(f"manifest does not describe the release pair: {sorted(stored)}")
+          present = sorted(path.name for path in (root / "dist").iterdir() if path.is_file())
+          if present != sorted(expected_names):
+              raise SystemExit(f"distribution directory is not exactly the pair: {present}")
+          lines = (root / "SHA256SUMS.txt").read_text(encoding="utf-8").splitlines()
+          if len(lines) != 2:
+              raise SystemExit(f"SHA256SUMS.txt must hold exactly two lines, got {len(lines)}")
+          checksums = {}
+          for line in lines:
+              digest, _, name = line.partition("  ")
+              checksums[name] = digest
+          for name, row in stored.items():
+              blob = (root / "dist" / name).read_bytes()
+              if hashlib.sha256(blob).hexdigest() != row["sha256"]:
+                  raise SystemExit(f"{name} does not match the stored hash")
+              if len(blob) != row["size"]:
+                  raise SystemExit(f"{name} does not match the stored size")
+              if checksums.get(name) != row["sha256"]:
+                  raise SystemExit(f"SHA256SUMS.txt does not describe {name}")
+          print("public identity and stored bytes agree")
+          PY
+
+      - name: Publish to PyPI
+        if: ${{ steps.remote_state.outputs.upload == 'true' }}
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+        with:
+          packages-dir: release-artifacts/dist/
+
+  pypi_verify:
+    name: verify PyPI publication anonymously
+    needs: pypi_publish
+    if: ${{ inputs.mode == 'staged-release' }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.12"
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: ${{ env.RELEASE_ARTIFACT }}
+          path: release-artifacts
+
+      - name: Poll the index and download both files
+        env:
+          INDEX_JSON_URL: https://pypi.org/pypi/metrifid/${{ inputs.release_version }}/json
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          import pathlib
+          import re
+          import time
+          import urllib.error
+          import urllib.request
+
+          def exact_rows(payload, expected_names):
+              """Validate the index file list before any mapping collapses a duplicate row."""
+              if not isinstance(payload, dict):
+                  raise SystemExit("index response is not an object")
+              rows = payload.get("urls")
+              if not isinstance(rows, list):
+                  raise SystemExit("index response has no file list")
+              seen = {}
+              for row in rows:
+                  if not isinstance(row, dict):
+                      raise SystemExit("index row is not an object")
+                  name = row.get("filename")
+                  if not isinstance(name, str) or name not in expected_names:
+                      raise SystemExit(f"index row has an unexpected filename: {name!r}")
+                  if name in seen:
+                      raise SystemExit(f"index lists {name!r} more than once")
+                  digests = row.get("digests")
+                  if not isinstance(digests, dict):
+                      raise SystemExit(f"index row for {name!r} carries no digests")
+                  digest = digests.get("sha256")
+                  if not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None:
+                      raise SystemExit(f"index row for {name!r} has a malformed digest")
+                  url = row.get("url")
+                  if not isinstance(url, str) or not url.startswith("https://"):
+                      raise SystemExit(f"index row for {name!r} has no https url")
+                  seen[name] = digest
+              return seen
+
+          root = pathlib.Path("release-artifacts")
+          manifest = json.loads((root / "dist-promotion-manifest.json").read_text(encoding="utf-8"))
+          expected = {row["filename"]: row["sha256"] for row in manifest["artifacts"]}
+          deadline = time.monotonic() + 300
+          last = "no response yet"
+          payload: dict[str, object] = {}
+          while True:
+              try:
+                  with urllib.request.urlopen(os.environ["INDEX_JSON_URL"], timeout=30) as response:
+                      payload = json.load(response)
+                  # A malformed, extra or duplicated row is immutable and unsafe, so exact_rows
+                  # raises rather than letting the deadline expire on a state that cannot heal.
+                  observed = exact_rows(payload, set(expected))
+                  if observed == expected:
+                      break
+                  wrong = sorted(n for n, d in observed.items() if expected[n] != d)
+                  if wrong:
+                      raise SystemExit(f"the index holds a different digest for {wrong}")
+                  # Only a correct subset of the expected pair is ordinary propagation.
+                  last = f"index is still missing {sorted(set(expected) - set(observed))}"
+              except urllib.error.HTTPError as error:
+                  if error.code != 404:
+                      raise SystemExit(f"index lookup failed with HTTP {error.code}")
+                  last = "index reports 404"
+              if time.monotonic() >= deadline:
+                  raise SystemExit(f"timed out waiting for the index; last observed: {last}")
+              time.sleep(15)
+
+          target = pathlib.Path("downloaded")
+          target.mkdir(exist_ok=True)
+          for row in payload["urls"]:
+              with urllib.request.urlopen(row["url"], timeout=60) as response:
+                  body = response.read()
+              if hashlib.sha256(body).hexdigest() != expected[row["filename"]]:
+                  raise SystemExit(f"downloaded {row['filename']} does not match the original")
+              if body != (root / "dist" / row["filename"]).read_bytes():
+                  raise SystemExit(f"downloaded {row['filename']} is not byte-identical")
+              (target / row["filename"]).write_bytes(body)
+          print("both remote files are byte-identical to the originals")
+          PY
+
+      - name: Install the public wheel and run the public journeys
+        run: |
+          set -euo pipefail
+          PUBLIC_VENV="$RUNNER_TEMP/metrifid-pypi-venv"
+          rm -rf "$PUBLIC_VENV"
+          python -m venv "$PUBLIC_VENV"
+          "$PUBLIC_VENV/bin/python" -m pip install \
+            "downloaded/metrifid-${RELEASE_VERSION}-py3-none-any.whl"
+          "$PUBLIC_VENV/bin/python" -m pip check
+          test "$("$PUBLIC_VENV/bin/python" -c 'import metrifid; print(metrifid.__version__)')" \
+            = "${RELEASE_VERSION}"
+          for surface in "" certify compare audit-timestep review-model qualify-workload \
+              review-runtime run-runtime-review; do
+            if [ -z "$surface" ]; then
+              "$PUBLIC_VENV/bin/metrifid" --help > /dev/null
+            else
+              "$PUBLIC_VENV/bin/metrifid" "$surface" --help > /dev/null
+            fi
+          done
+          JOURNEY="$RUNNER_TEMP/metrifid-pypi-journey"
+          rm -rf "$JOURNEY"; mkdir -p "$JOURNEY"
+          cd "$JOURNEY"
+          PATH="$PUBLIC_VENV/bin:$PATH" PYTHONPATH= "$PUBLIC_VENV/bin/python" -m metrifid.demo > /dev/null
+          PATH="$PUBLIC_VENV/bin:$PATH" PYTHONPATH= "$PUBLIC_VENV/bin/python" - <<'PY'
+          import pathlib
+          import subprocess
+
+          baseline = pathlib.Path("baseline.xml")
+          candidate = pathlib.Path("candidate.xml")
+          baseline.write_text(
+              '<mujoco model="journey">\n'
+              "  <worldbody>\n"
+              '    <body name="arm" pos="0 0 1">\n'
+              '      <geom name="link" type="capsule" size="0.04 0.2" mass="1.5"/>\n'
+              '      <joint name="shoulder" type="hinge" axis="0 1 0"/>\n'
+              "    </body>\n"
+              "  </worldbody>\n"
+              "</mujoco>\n",
+              encoding="utf-8",
+          )
+          candidate.write_text(
+              '<mujoco model="journey">\n'
+              "  <worldbody>\n"
+              '    <body pos="0 0 1" name="arm">\n'
+              '      <geom mass="1.5" name="link" size="0.04 0.2" type="capsule"/>\n'
+              '      <joint axis="0 1 0" name="shoulder" type="hinge"/>\n'
+              "    </body>\n"
+              "  </worldbody>\n"
+              "</mujoco>\n",
+              encoding="utf-8",
+          )
+          done = subprocess.run(
+              ["metrifid", "certify", str(baseline), str(candidate), "--output", "receipt"],
+              capture_output=True,
+              text=True,
+          )
+          if done.returncode != 0:
+              raise SystemExit(f"certify journey exited {done.returncode}: {done.stderr}")
+          published = sorted(path.name for path in pathlib.Path("receipt").rglob("*") if path.is_file())
+          if not published:
+              raise SystemExit("certify journey published no receipt")
+          print(f"certify journey published {len(published)} receipt files")
+          PY
+
+  github_release:
+    name: finalize the GitHub release
+    needs: pypi_verify
+    if: ${{ inputs.mode == 'staged-release' }}
+    runs-on: ubuntu-24.04
+    environment:
+      name: github-release
+      url: https://github.com/${{ github.repository }}/releases/tag/${{ inputs.planned_tag }}
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.12"
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: ${{ env.RELEASE_ARTIFACT }}
+          path: release-artifacts
+
+      - name: Require public identity after approval
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          default_branch="$(gh api "repos/${GH_REPO}" --jq '.default_branch')"
+          test -n "$default_branch"
+          PUBLIC_MAIN_HEAD="$(gh api "repos/${GH_REPO}/commits/${default_branch}" --jq '.sha')"
+          REMOTE_TREE="$(gh api "repos/${GH_REPO}/commits/${EXPECTED_COMMIT}" --jq '.commit.tree.sha')"
+          REMOTE_WORKFLOW_B64="$(gh api "repos/${GH_REPO}/contents/.github/workflows/publish.yml?ref=${EXPECTED_COMMIT}" --jq '.content')"
+          REMOTE_WORKFLOW_ENCODING="$(gh api "repos/${GH_REPO}/contents/.github/workflows/publish.yml?ref=${EXPECTED_COMMIT}" --jq '.encoding')"
+          TAG_OBJECT_TYPE="$(gh api "repos/${GH_REPO}/git/ref/tags/${PLANNED_TAG}" --jq '.object.type')"
+          TAG_OBJECT_SHA="$(gh api "repos/${GH_REPO}/git/ref/tags/${PLANNED_TAG}" --jq '.object.sha')"
+          if [ "$TAG_OBJECT_TYPE" = "tag" ]; then
+            TAG_PEELED="$(gh api "repos/${GH_REPO}/git/tags/${TAG_OBJECT_SHA}" --jq '.object.sha')"
+            TAG_PEELED_TYPE="$(gh api "repos/${GH_REPO}/git/tags/${TAG_OBJECT_SHA}" --jq '.object.type')"
+          else
+            TAG_PEELED=""
+            TAG_PEELED_TYPE=""
+          fi
+          export PUBLIC_MAIN_HEAD REMOTE_TREE REMOTE_WORKFLOW_B64 REMOTE_WORKFLOW_ENCODING
+          export TAG_OBJECT_TYPE TAG_PEELED TAG_PEELED_TYPE
+          python - <<'PY'
+          import base64
+          import binascii
+          import hashlib
+          import json
+          import os
+          import pathlib
+          import re
+
+          root = pathlib.Path("release-artifacts")
+          version = os.environ["RELEASE_VERSION"]
+          tag = os.environ["PLANNED_TAG"]
+          expected = os.environ["EXPECTED_COMMIT"]
+          observed = os.environ["GITHUB_SHA"]
+
+          if not re.fullmatch(r"[0-9a-f]{40}", expected):
+              raise SystemExit(f"expected commit is not a full commit id: {expected!r}")
+          if expected != observed:
+              raise SystemExit(f"expected commit {expected!r} is not the run commit {observed!r}")
+
+          manifest = json.loads((root / "dist-promotion-manifest.json").read_text(encoding="utf-8"))
+          for field, value in (
+              ("commit", observed),
+              ("version", version),
+              ("tag", tag),
+              ("repository", os.environ["GITHUB_REPOSITORY"]),
+          ):
+              if manifest.get(field) != value:
+                  raise SystemExit(f"manifest {field} is {manifest.get(field)!r}, not {value!r}")
+
+          remote_tree = os.environ["REMOTE_TREE"]
+          if not re.fullmatch(r"[0-9a-f]{40}", remote_tree):
+              raise SystemExit(f"the public commit tree is not an object id: {remote_tree!r}")
+          if manifest.get("tree") != remote_tree:
+              raise SystemExit(
+                  f"manifest tree {manifest.get('tree')!r} is not the public tree {remote_tree!r}"
+              )
+          if os.environ["REMOTE_WORKFLOW_ENCODING"] != "base64":
+              raise SystemExit(
+                  "the public workflow content is not base64: "
+                  f"{os.environ['REMOTE_WORKFLOW_ENCODING']!r}"
+              )
+          # GitHub documents line separators inside its Base64 content. Only those are removed,
+          # and decoding is strict, so trailing garbage or bad padding cannot slip through.
+          encoded = os.environ["REMOTE_WORKFLOW_B64"].replace("\n", "")
+          if not encoded:
+              raise SystemExit("the public workflow content is empty")
+          try:
+              workflow_bytes = base64.b64decode(encoded, validate=True)
+          except (binascii.Error, ValueError) as error:
+              raise SystemExit(f"the public workflow content is not decodable: {error}") from error
+          if not workflow_bytes:
+              raise SystemExit("the public workflow content is empty")
+          remote_workflow = hashlib.sha256(workflow_bytes).hexdigest()
+          if manifest.get("workflow_sha256") != remote_workflow:
+              raise SystemExit(
+                  f"manifest workflow digest {manifest.get('workflow_sha256')!r} is not the public "
+                  f"workflow digest {remote_workflow!r}"
+              )
+
+          if os.environ["PUBLIC_MAIN_HEAD"] != observed:
+              raise SystemExit(
+                  f"public default branch head {os.environ['PUBLIC_MAIN_HEAD']!r} is not {observed!r}"
+              )
+          if os.environ["TAG_OBJECT_TYPE"] != "tag":
+              raise SystemExit(
+                  f"tag {tag!r} is not an annotated tag object: {os.environ['TAG_OBJECT_TYPE']!r}"
+              )
+          if os.environ["TAG_PEELED_TYPE"] != "commit":
+              raise SystemExit(f"tag {tag!r} does not peel to a commit object")
+          if os.environ["TAG_PEELED"] != observed:
+              raise SystemExit(
+                  f"annotated tag peels to {os.environ['TAG_PEELED']!r}, not {observed!r}"
+              )
+
+          expected_names = {
+              f"metrifid-{version}-py3-none-any.whl",
+              f"metrifid-{version}.tar.gz",
           }
-          assert set(expected) == expected_names, expected
-          assert observed == expected, (observed, expected)
+          stored = {row["filename"]: row for row in manifest["artifacts"]}
+          if set(stored) != expected_names:
+              raise SystemExit(f"manifest does not describe the release pair: {sorted(stored)}")
+          present = sorted(path.name for path in (root / "dist").iterdir() if path.is_file())
+          if present != sorted(expected_names):
+              raise SystemExit(f"distribution directory is not exactly the pair: {present}")
+          lines = (root / "SHA256SUMS.txt").read_text(encoding="utf-8").splitlines()
+          if len(lines) != 2:
+              raise SystemExit(f"SHA256SUMS.txt must hold exactly two lines, got {len(lines)}")
+          checksums = {}
+          for line in lines:
+              digest, _, name = line.partition("  ")
+              checksums[name] = digest
+          for name, row in stored.items():
+              blob = (root / "dist" / name).read_bytes()
+              if hashlib.sha256(blob).hexdigest() != row["sha256"]:
+                  raise SystemExit(f"{name} does not match the stored hash")
+              if len(blob) != row["size"]:
+                  raise SystemExit(f"{name} does not match the stored size")
+              if checksums.get(name) != row["sha256"]:
+                  raise SystemExit(f"SHA256SUMS.txt does not describe {name}")
+          print("public identity and stored bytes agree")
+          PY
+
+      - name: Determine the release state
+        id: release_state
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          LOOKUP_RESPONSE: ${{ runner.temp }}/release-lookup.http
+        run: |
+          set -euo pipefail
+          # The identity step above has already proved authenticated repository access, so only the
+          # exact status of this release-by-tag resource can mean absence.
+          if gh api --include "repos/${GH_REPO}/releases/tags/${PLANNED_TAG}" > "$LOOKUP_RESPONSE"; then
+            echo "release lookup returned a success status"
+          else
+            echo "release lookup returned a non-success status; the status line decides"
+          fi
+          python - <<'PY'
+          import json
+          import os
+          import pathlib
+          import re
+
+          # Exactly one of absent, draft or published. Authentication, network, rate-limit,
+          # malformed and unexpected statuses are fatal and authorize no mutation.
+          raw = pathlib.Path(os.environ["LOOKUP_RESPONSE"]).read_text(encoding="utf-8", errors="replace")
+          parts = re.split(r"\r?\n\r?\n", raw, maxsplit=1)
+          head = parts[0]
+          body = parts[1] if len(parts) > 1 else ""
+          status_line = head.splitlines()[0] if head.strip() else ""
+          match = re.match(r"HTTP/[0-9.]+ ([0-9]{3})", status_line)
+          if match is None:
+              raise SystemExit(f"release lookup returned no status line: {status_line!r}")
+          status = int(match.group(1))
+          if status == 404:
+              state = "absent"
+          elif status == 200:
+              try:
+                  release = json.loads(body)
+              except json.JSONDecodeError as error:
+                  raise SystemExit(f"release lookup returned malformed JSON: {error}") from error
+              if not isinstance(release, dict) or not isinstance(release.get("draft"), bool):
+                  raise SystemExit("release lookup response has no draft field")
+              state = "draft" if release["draft"] else "published"
+          else:
+              raise SystemExit(f"release lookup returned HTTP {status}")
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as handle:
+              handle.write(f"state={state}\n")
+          print(f"release state is {state}")
+          PY
+
+      - name: Create the release as a draft when absent
+        if: ${{ steps.release_state.outputs.state == 'absent' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          ASSETS="$RUNNER_TEMP/metrifid-public-assets"
+          rm -rf "$ASSETS"; mkdir -p "$ASSETS"
+          cp "release-artifacts/dist/metrifid-${RELEASE_VERSION}-py3-none-any.whl" "$ASSETS/"
+          cp "release-artifacts/dist/metrifid-${RELEASE_VERSION}.tar.gz" "$ASSETS/"
+          cp release-artifacts/SHA256SUMS.txt "$ASSETS/"
+          test "$(find "$ASSETS" -maxdepth 1 -type f | wc -l | tr -d ' ')" = "3"
+          gh release create "$PLANNED_TAG" \
+            --repo "$GH_REPO" \
+            --title "metrifid ${RELEASE_VERSION}" \
+            --notes-file release-artifacts/RELEASE_NOTES.md \
+            --verify-tag \
+            --draft \
+            "$ASSETS"/*
+
+      - name: Verify the complete release contract before publishing
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_STATE: ${{ runner.temp }}/metrifid-release-precheck
+          EXPECT_DRAFT: ${{ steps.release_state.outputs.state == 'published' && 'false' || 'true' }}
+        run: |
+          set -euo pipefail
+          rm -rf "$RELEASE_STATE"; mkdir -p "$RELEASE_STATE"
+          gh release view "$PLANNED_TAG" --repo "$GH_REPO" \
+            --json tagName,isDraft,isPrerelease,name,body,assets > "$RELEASE_STATE/release.json"
+          gh release download "$PLANNED_TAG" --repo "$GH_REPO" --dir "$RELEASE_STATE"
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          import pathlib
+
+          # One complete release contract, used unchanged before and after publication. The only
+          # difference between the two runs is the draft state each expects.
+          version = os.environ["RELEASE_VERSION"]
+          tag = os.environ["PLANNED_TAG"]
+          state = pathlib.Path(os.environ["RELEASE_STATE"])
+          root = pathlib.Path("release-artifacts")
+          release = json.loads((state / "release.json").read_text(encoding="utf-8"))
+          allowlist = {
+              f"metrifid-{version}-py3-none-any.whl",
+              f"metrifid-{version}.tar.gz",
+              "SHA256SUMS.txt",
+          }
+
+          if release["tagName"] != tag:
+              raise SystemExit(f"release tag is {release['tagName']!r}, not {tag!r}")
+          if release["name"] != f"metrifid {version}":
+              raise SystemExit(f"release title is {release['name']!r}")
+          if release["isPrerelease"] is not False:
+              raise SystemExit("a stable release must not be marked as a prerelease")
+
+          expected_draft = os.environ["EXPECT_DRAFT"] == "true"
+          if release["isDraft"] is not expected_draft:
+              raise SystemExit(f"release draft state is {release['isDraft']!r}")
+
+          # One narrow normalization: GitHub returns the body without a terminal newline. Nothing
+          # else about the body is normalized, so internal whitespace stays meaningful.
+          expected_body = (root / "RELEASE_NOTES.md").read_text(encoding="utf-8")
+          observed_body = release["body"]
+          if observed_body != expected_body and observed_body != expected_body.removesuffix("\n"):
+              raise SystemExit("release body does not equal the curated notes")
+
+          asset_names = {asset["name"] for asset in release["assets"]}
+          if asset_names != allowlist:
+              raise SystemExit(f"release assets are not exactly the allowlist: {sorted(asset_names)}")
+          downloaded = {p.name for p in state.iterdir() if p.is_file()} - {"release.json"}
+          if downloaded != allowlist:
+              raise SystemExit(f"downloaded assets are not exactly the allowlist: {sorted(downloaded)}")
+
+          manifest = json.loads((root / "dist-promotion-manifest.json").read_text(encoding="utf-8"))
+          for row in manifest["artifacts"]:
+              blob = (state / row["filename"]).read_bytes()
+              if hashlib.sha256(blob).hexdigest() != row["sha256"]:
+                  raise SystemExit(f"published {row['filename']} does not match the accepted hash")
+              if blob != (root / "dist" / row["filename"]).read_bytes():
+                  raise SystemExit(f"published {row['filename']} is not byte-identical")
+          published_sums = (state / "SHA256SUMS.txt").read_bytes()
+          if published_sums != (root / "SHA256SUMS.txt").read_bytes():
+              raise SystemExit("published SHA256SUMS.txt does not equal the accepted file")
+          lines = published_sums.decode("utf-8").splitlines()
+          if len(lines) != 2:
+              raise SystemExit(f"published SHA256SUMS.txt must hold two lines, got {len(lines)}")
+          mapping = {}
+          for line in lines:
+              digest, _, name = line.partition("  ")
+              mapping[name] = digest
+          if mapping != {row["filename"]: row["sha256"] for row in manifest["artifacts"]}:
+              raise SystemExit("published SHA256SUMS.txt does not describe the release pair")
+          print(f"complete release contract matches with isDraft={release['isDraft']}")
+          PY
+
+      - name: Require public identity again immediately before publication
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          default_branch="$(gh api "repos/${GH_REPO}" --jq '.default_branch')"
+          test -n "$default_branch"
+          PUBLIC_MAIN_HEAD="$(gh api "repos/${GH_REPO}/commits/${default_branch}" --jq '.sha')"
+          REMOTE_TREE="$(gh api "repos/${GH_REPO}/commits/${EXPECTED_COMMIT}" --jq '.commit.tree.sha')"
+          REMOTE_WORKFLOW_B64="$(gh api "repos/${GH_REPO}/contents/.github/workflows/publish.yml?ref=${EXPECTED_COMMIT}" --jq '.content')"
+          REMOTE_WORKFLOW_ENCODING="$(gh api "repos/${GH_REPO}/contents/.github/workflows/publish.yml?ref=${EXPECTED_COMMIT}" --jq '.encoding')"
+          TAG_OBJECT_TYPE="$(gh api "repos/${GH_REPO}/git/ref/tags/${PLANNED_TAG}" --jq '.object.type')"
+          TAG_OBJECT_SHA="$(gh api "repos/${GH_REPO}/git/ref/tags/${PLANNED_TAG}" --jq '.object.sha')"
+          if [ "$TAG_OBJECT_TYPE" = "tag" ]; then
+            TAG_PEELED="$(gh api "repos/${GH_REPO}/git/tags/${TAG_OBJECT_SHA}" --jq '.object.sha')"
+            TAG_PEELED_TYPE="$(gh api "repos/${GH_REPO}/git/tags/${TAG_OBJECT_SHA}" --jq '.object.type')"
+          else
+            TAG_PEELED=""
+            TAG_PEELED_TYPE=""
+          fi
+          export PUBLIC_MAIN_HEAD REMOTE_TREE REMOTE_WORKFLOW_B64 REMOTE_WORKFLOW_ENCODING
+          export TAG_OBJECT_TYPE TAG_PEELED TAG_PEELED_TYPE
+          python - <<'PY'
+          import base64
+          import binascii
+          import hashlib
+          import json
+          import os
+          import pathlib
+          import re
+
+          root = pathlib.Path("release-artifacts")
+          version = os.environ["RELEASE_VERSION"]
+          tag = os.environ["PLANNED_TAG"]
+          expected = os.environ["EXPECTED_COMMIT"]
+          observed = os.environ["GITHUB_SHA"]
+
+          if not re.fullmatch(r"[0-9a-f]{40}", expected):
+              raise SystemExit(f"expected commit is not a full commit id: {expected!r}")
+          if expected != observed:
+              raise SystemExit(f"expected commit {expected!r} is not the run commit {observed!r}")
+
+          manifest = json.loads((root / "dist-promotion-manifest.json").read_text(encoding="utf-8"))
+          for field, value in (
+              ("commit", observed),
+              ("version", version),
+              ("tag", tag),
+              ("repository", os.environ["GITHUB_REPOSITORY"]),
+          ):
+              if manifest.get(field) != value:
+                  raise SystemExit(f"manifest {field} is {manifest.get(field)!r}, not {value!r}")
+
+          remote_tree = os.environ["REMOTE_TREE"]
+          if not re.fullmatch(r"[0-9a-f]{40}", remote_tree):
+              raise SystemExit(f"the public commit tree is not an object id: {remote_tree!r}")
+          if manifest.get("tree") != remote_tree:
+              raise SystemExit(
+                  f"manifest tree {manifest.get('tree')!r} is not the public tree {remote_tree!r}"
+              )
+          if os.environ["REMOTE_WORKFLOW_ENCODING"] != "base64":
+              raise SystemExit(
+                  "the public workflow content is not base64: "
+                  f"{os.environ['REMOTE_WORKFLOW_ENCODING']!r}"
+              )
+          # GitHub documents line separators inside its Base64 content. Only those are removed,
+          # and decoding is strict, so trailing garbage or bad padding cannot slip through.
+          encoded = os.environ["REMOTE_WORKFLOW_B64"].replace("\n", "")
+          if not encoded:
+              raise SystemExit("the public workflow content is empty")
+          try:
+              workflow_bytes = base64.b64decode(encoded, validate=True)
+          except (binascii.Error, ValueError) as error:
+              raise SystemExit(f"the public workflow content is not decodable: {error}") from error
+          if not workflow_bytes:
+              raise SystemExit("the public workflow content is empty")
+          remote_workflow = hashlib.sha256(workflow_bytes).hexdigest()
+          if manifest.get("workflow_sha256") != remote_workflow:
+              raise SystemExit(
+                  f"manifest workflow digest {manifest.get('workflow_sha256')!r} is not the public "
+                  f"workflow digest {remote_workflow!r}"
+              )
+
+          if os.environ["PUBLIC_MAIN_HEAD"] != observed:
+              raise SystemExit(
+                  f"public default branch head {os.environ['PUBLIC_MAIN_HEAD']!r} is not {observed!r}"
+              )
+          if os.environ["TAG_OBJECT_TYPE"] != "tag":
+              raise SystemExit(
+                  f"tag {tag!r} is not an annotated tag object: {os.environ['TAG_OBJECT_TYPE']!r}"
+              )
+          if os.environ["TAG_PEELED_TYPE"] != "commit":
+              raise SystemExit(f"tag {tag!r} does not peel to a commit object")
+          if os.environ["TAG_PEELED"] != observed:
+              raise SystemExit(
+                  f"annotated tag peels to {os.environ['TAG_PEELED']!r}, not {observed!r}"
+              )
+
+          expected_names = {
+              f"metrifid-{version}-py3-none-any.whl",
+              f"metrifid-{version}.tar.gz",
+          }
+          stored = {row["filename"]: row for row in manifest["artifacts"]}
+          if set(stored) != expected_names:
+              raise SystemExit(f"manifest does not describe the release pair: {sorted(stored)}")
+          present = sorted(path.name for path in (root / "dist").iterdir() if path.is_file())
+          if present != sorted(expected_names):
+              raise SystemExit(f"distribution directory is not exactly the pair: {present}")
+          lines = (root / "SHA256SUMS.txt").read_text(encoding="utf-8").splitlines()
+          if len(lines) != 2:
+              raise SystemExit(f"SHA256SUMS.txt must hold exactly two lines, got {len(lines)}")
+          checksums = {}
+          for line in lines:
+              digest, _, name = line.partition("  ")
+              checksums[name] = digest
+          for name, row in stored.items():
+              blob = (root / "dist" / name).read_bytes()
+              if hashlib.sha256(blob).hexdigest() != row["sha256"]:
+                  raise SystemExit(f"{name} does not match the stored hash")
+              if len(blob) != row["size"]:
+                  raise SystemExit(f"{name} does not match the stored size")
+              if checksums.get(name) != row["sha256"]:
+                  raise SystemExit(f"SHA256SUMS.txt does not describe {name}")
+          print("public identity and stored bytes agree")
+          PY
+
+      - name: Publish the verified draft as the final mutation
+        if: ${{ steps.release_state.outputs.state != 'published' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          gh release edit "$PLANNED_TAG" --repo "$GH_REPO" --draft=false
+
+      - name: Verify the complete release contract after publishing
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_STATE: ${{ runner.temp }}/metrifid-release-postcheck
+          EXPECT_DRAFT: "false"
+        run: |
+          set -euo pipefail
+          rm -rf "$RELEASE_STATE"; mkdir -p "$RELEASE_STATE"
+          gh release view "$PLANNED_TAG" --repo "$GH_REPO" \
+            --json tagName,isDraft,isPrerelease,name,body,assets > "$RELEASE_STATE/release.json"
+          gh release download "$PLANNED_TAG" --repo "$GH_REPO" --dir "$RELEASE_STATE"
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          import pathlib
+
+          # One complete release contract, used unchanged before and after publication. The only
+          # difference between the two runs is the draft state each expects.
+          version = os.environ["RELEASE_VERSION"]
+          tag = os.environ["PLANNED_TAG"]
+          state = pathlib.Path(os.environ["RELEASE_STATE"])
+          root = pathlib.Path("release-artifacts")
+          release = json.loads((state / "release.json").read_text(encoding="utf-8"))
+          allowlist = {
+              f"metrifid-{version}-py3-none-any.whl",
+              f"metrifid-{version}.tar.gz",
+              "SHA256SUMS.txt",
+          }
+
+          if release["tagName"] != tag:
+              raise SystemExit(f"release tag is {release['tagName']!r}, not {tag!r}")
+          if release["name"] != f"metrifid {version}":
+              raise SystemExit(f"release title is {release['name']!r}")
+          if release["isPrerelease"] is not False:
+              raise SystemExit("a stable release must not be marked as a prerelease")
+
+          expected_draft = os.environ["EXPECT_DRAFT"] == "true"
+          if release["isDraft"] is not expected_draft:
+              raise SystemExit(f"release draft state is {release['isDraft']!r}")
+
+          # One narrow normalization: GitHub returns the body without a terminal newline. Nothing
+          # else about the body is normalized, so internal whitespace stays meaningful.
+          expected_body = (root / "RELEASE_NOTES.md").read_text(encoding="utf-8")
+          observed_body = release["body"]
+          if observed_body != expected_body and observed_body != expected_body.removesuffix("\n"):
+              raise SystemExit("release body does not equal the curated notes")
+
+          asset_names = {asset["name"] for asset in release["assets"]}
+          if asset_names != allowlist:
+              raise SystemExit(f"release assets are not exactly the allowlist: {sorted(asset_names)}")
+          downloaded = {p.name for p in state.iterdir() if p.is_file()} - {"release.json"}
+          if downloaded != allowlist:
+              raise SystemExit(f"downloaded assets are not exactly the allowlist: {sorted(downloaded)}")
+
+          manifest = json.loads((root / "dist-promotion-manifest.json").read_text(encoding="utf-8"))
+          for row in manifest["artifacts"]:
+              blob = (state / row["filename"]).read_bytes()
+              if hashlib.sha256(blob).hexdigest() != row["sha256"]:
+                  raise SystemExit(f"published {row['filename']} does not match the accepted hash")
+              if blob != (root / "dist" / row["filename"]).read_bytes():
+                  raise SystemExit(f"published {row['filename']} is not byte-identical")
+          published_sums = (state / "SHA256SUMS.txt").read_bytes()
+          if published_sums != (root / "SHA256SUMS.txt").read_bytes():
+              raise SystemExit("published SHA256SUMS.txt does not equal the accepted file")
+          lines = published_sums.decode("utf-8").splitlines()
+          if len(lines) != 2:
+              raise SystemExit(f"published SHA256SUMS.txt must hold two lines, got {len(lines)}")
+          mapping = {}
+          for line in lines:
+              digest, _, name = line.partition("  ")
+              mapping[name] = digest
+          if mapping != {row["filename"]: row["sha256"] for row in manifest["artifacts"]}:
+              raise SystemExit("published SHA256SUMS.txt does not describe the release pair")
+          print(f"complete release contract matches with isDraft={release['isDraft']}")
           PY

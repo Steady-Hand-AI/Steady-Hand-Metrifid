@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 
 from metrifid.certify._artifact import serialize_complete_artifact
-from metrifid.certify._bytes import compare_artifact_bytes
+from metrifid.certify._bytes import compare_retained_artifacts
 from metrifid.certify._fields import (
     FIELD_DIFFERENCES_IDENTIFIED,
     MAX_CHANGED_FIELDS_RETURNED,
@@ -60,8 +60,8 @@ def _report(tmp_path: Path, **overrides: str) -> dict:
     candidate = serialize_complete_artifact(
         mujoco.MjModel.from_xml_string(candidate_xml), "candidate", tmp_path
     )
-    comparison = compare_artifact_bytes(baseline.path, candidate.path)
-    return build_field_report(baseline.path, candidate.path, comparison)
+    comparison = compare_retained_artifacts(baseline.retained, candidate.retained)
+    return build_field_report(baseline.retained, candidate.retained, comparison)
 
 
 def _entry(report: dict, path: str) -> dict:
@@ -193,7 +193,7 @@ def _compared_paths(tmp_path: Path) -> list[str]:
     artifact = serialize_complete_artifact(
         mujoco.MjModel.from_xml_string(_TEMPLATE.format(**_BASE)), "baseline", tmp_path
     )
-    facts, _ = _facts_from_artifact(artifact.path)
+    facts, _ = _facts_from_artifact(artifact.retained)
     return sorted(facts)
 
 
@@ -226,7 +226,7 @@ def test_every_member_one_level_under_vis_is_a_struct_and_is_reported_as_omitted
     artifact = serialize_complete_artifact(
         mujoco.MjModel.from_xml_string(_TEMPLATE.format(**_BASE)), "baseline", tmp_path
     )
-    facts, omitted = _facts_from_artifact(artifact.path)
+    facts, omitted = _facts_from_artifact(artifact.retained)
     assert not any(path.startswith("vis.") for path in facts)
     vis_omissions = {path: reason for path, reason in omitted if path.startswith("vis.")}
     assert len(vis_omissions) == 12
@@ -248,9 +248,9 @@ def test_a_difference_below_the_public_surface_falls_back_without_changing_the_o
     candidate = serialize_complete_artifact(
         mujoco.MjModel.from_xml_string(xml.format(fovy=60)), "candidate", tmp_path
     )
-    comparison = compare_artifact_bytes(baseline.path, candidate.path)
+    comparison = compare_retained_artifacts(baseline.retained, candidate.retained)
     assert comparison.equal is False
-    report = build_field_report(baseline.path, candidate.path, comparison)
+    report = build_field_report(baseline.retained, candidate.retained, comparison)
     assert report["field_report_status"] == NO_PUBLIC_FIELD_DIFFERENCE_IDENTIFIED
     assert report["changed_fields_total"] == 0
     assert report["differing_byte_count"] == comparison.differing_byte_count
@@ -268,8 +268,8 @@ def test_the_three_expanded_containers_are_read_one_level_down(tmp_path: Path) -
     artifact = serialize_complete_artifact(
         mujoco.MjModel.from_xml_string(xml), "baseline", tmp_path / "probe"
     )
-    comparison = compare_artifact_bytes(artifact.path, artifact.path)
-    report = build_field_report(artifact.path, artifact.path, comparison)
+    comparison = compare_retained_artifacts(artifact.retained, artifact.retained)
+    report = build_field_report(artifact.retained, artifact.retained, comparison)
     omitted = {item["path"]: item["reason"] for item in report["omitted_fields"]}
     for container in ("opt", "stat", "vis"):
         assert omitted[container] == "EXPANDED_ONE_LEVEL_BELOW"
@@ -289,8 +289,8 @@ def test_identical_artifacts_report_no_public_field_difference(tmp_path: Path) -
     artifact = serialize_complete_artifact(
         mujoco.MjModel.from_xml_string(xml), "baseline", tmp_path
     )
-    comparison = compare_artifact_bytes(artifact.path, artifact.path)
-    report = build_field_report(artifact.path, artifact.path, comparison)
+    comparison = compare_retained_artifacts(artifact.retained, artifact.retained)
+    report = build_field_report(artifact.retained, artifact.retained, comparison)
     assert report["field_report_status"] == NO_PUBLIC_FIELD_DIFFERENCE_IDENTIFIED
     assert report["changed_fields_total"] == 0
     assert report["truncated"] is False
@@ -420,8 +420,8 @@ def _report_for(tmp_path: Path, baseline_xml: str, candidate_xml: str) -> dict:
     candidate = serialize_complete_artifact(
         mujoco.MjModel.from_xml_string(candidate_xml), "candidate", tmp_path
     )
-    comparison = compare_artifact_bytes(baseline.path, candidate.path)
-    return build_field_report(baseline.path, candidate.path, comparison)
+    comparison = compare_retained_artifacts(baseline.retained, candidate.retained)
+    return build_field_report(baseline.retained, candidate.retained, comparison)
 
 
 def test_more_than_eight_changed_elements_truncates_witnesses_and_says_so(

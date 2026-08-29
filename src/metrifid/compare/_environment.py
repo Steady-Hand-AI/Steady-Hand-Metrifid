@@ -13,15 +13,16 @@ from typing import cast
 import mujoco  # type: ignore[import-untyped]
 import numpy as np
 
+from .._mujoco_runtime import MujocoClaimSurface, admit_mujoco_runtime
 from ..errors import EngineThreadpoolState
 from ..json_values import CanonicalValue, canonical_sha256
 from ..schemas import EnvironmentIdentity
 
-# Official MuJoCo packaging ships the native engine as libmujoco.so* on Linux and
-# libmujoco.*.dylib on Darwin. Exactly one regular nonsymlink match must resolve.
-_NATIVE_LIBRARY_PATTERNS: dict[str, str] = {
-    "Linux": "libmujoco.so*",
-    "Darwin": "libmujoco.*.dylib",
+# Official MuJoCo packaging gives the versioned native engine a platform-specific
+# filename. Exactly one regular nonsymlink match for the admitted version must resolve.
+_NATIVE_LIBRARY_NAME_TEMPLATES: dict[str, str] = {
+    "Linux": "libmujoco.so.{version}",
+    "Darwin": "libmujoco.{version}.dylib",
 }
 
 
@@ -122,20 +123,25 @@ def _distribution_payload_sha256(distribution_name: str, package_name: str) -> s
 
 def _native_mujoco_sha256() -> str:
     """Hash the native MuJoCo shared library loaded by the Python package."""
-    pattern = _NATIVE_LIBRARY_PATTERNS.get(platform.system())
-    if pattern is None:
+    name_template = _NATIVE_LIBRARY_NAME_TEMPLATES.get(platform.system())
+    if name_template is None:
         raise RuntimeError("native MuJoCo library discovery is unsupported on this platform")
     package_file = getattr(mujoco, "__file__", None)
     if type(package_file) is not str:
         raise RuntimeError("mujoco package path is unavailable")
     root = Path(package_file).resolve(strict=True).parent
-    candidates = sorted(
-        path for path in root.rglob(pattern) if path.is_file() and not path.is_symlink()
+    admission = admit_mujoco_runtime(
+        MujocoClaimSurface.DYNAMIC_REPLAY,
+        runtime_module=mujoco,
     )
-    exact = [path for path in candidates if "3.10.0" in path.name]
-    selected = exact if exact else candidates
+    exact_name = name_template.format(version=admission.native_version_string)
+    selected = sorted(
+        path for path in root.rglob(exact_name) if path.is_file() and not path.is_symlink()
+    )
     if len(selected) != 1:
-        raise RuntimeError("exactly one native MuJoCo library must be identifiable")
+        raise RuntimeError(
+            "exactly one native MuJoCo library matching the admitted runtime must be identifiable"
+        )
     return hashlib.sha256(selected[0].read_bytes()).hexdigest()
 
 

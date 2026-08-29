@@ -1,4 +1,4 @@
-"""Installed command-line boundary for the single comparison compare workflow."""
+"""Installed CLI for certification, comparison, qualification, and runtime review."""
 
 from __future__ import annotations
 
@@ -34,12 +34,18 @@ class _Parser(argparse.ArgumentParser):
 
 
 def _parser() -> argparse.ArgumentParser:
-    """Build the command tree for compare, audit-timestep, and certify."""
+    """Build the installed command tree without importing native-backed product modules."""
     parser = _Parser(
         prog="metrifid",
+        # The description is emitted verbatim. Argparse's default formatter rewraps it to the
+        # terminal width, which splits the product sentence and makes the installed root help
+        # unsearchable for the exact phrase users and release checks look for.
+        formatter_class=argparse.RawDescriptionHelpFormatter,
         description=(
-            "Compare two admitted MuJoCo 3.10.0 CPU models under one strict JSON "
-            "open-loop workload contract."
+            "Verify compiled MuJoCo models, review static model changes, compare declared "
+            "workloads, audit timesteps, and qualify whether declared workloads detect declared "
+            "model perturbations. Create or review a complete native-runtime migration evidence "
+            "set through explicit prepared profiles."
         ),
     )
     subcommands = parser.add_subparsers(dest="command", required=True)
@@ -63,8 +69,8 @@ def _parser() -> argparse.ArgumentParser:
         "certify",
         help="certify whether two MJCF closures compile to byte-identical MJB artifacts",
         description=(
-            "Compile two MuJoCo 3.10.0 source closures and state, over every serialized "
-            "byte, whether they produce identical complete MJB artifacts."
+            "Compile two source closures with the exact admitted MuJoCo runtime and state, over "
+            "every serialized byte, whether they produce identical complete MJB artifacts."
         ),
     )
     certify.add_argument("baseline_mjcf", help="path to the baseline MJCF entrypoint")
@@ -72,6 +78,48 @@ def _parser() -> argparse.ArgumentParser:
     certify.add_argument("--output", required=True, help="output directory to publish into")
     certify.add_argument("--baseline-root", default=None, help="explicit baseline model root")
     certify.add_argument("--candidate-root", default=None, help="explicit candidate model root")
+    review = subcommands.add_parser(
+        "review-model",
+        help="review compiled model changes against a declared release policy",
+        description=(
+            "Compile two MuJoCo model sources and classify their typed static changes "
+            "against one strict model release policy."
+        ),
+    )
+    review.add_argument("baseline", metavar="BASELINE", help="baseline MJCF entrypoint")
+    review.add_argument("candidate", metavar="CANDIDATE", help="candidate MJCF entrypoint")
+    review.add_argument("--policy", required=True, help="strict model release policy JSON")
+    review.add_argument("--output", required=True, help="output directory to publish into")
+    review.add_argument("--baseline-root", default=None, help="explicit baseline model root")
+    review.add_argument("--candidate-root", default=None, help="explicit candidate model root")
+    qualify = subcommands.add_parser(
+        "qualify-workload",
+        help="qualify whether declared workloads detect declared model perturbations",
+        description=(
+            "Run every declared probe comparison, select the best three-workload subset by "
+            "exact enumeration, and state which declared perturbations remain blind."
+        ),
+    )
+    qualify.add_argument("configuration", help="path to qualification.json")
+    runtime_review = subcommands.add_parser(
+        "review-runtime",
+        help="review one exact native-runtime migration from retained three-grid evidence",
+        description=(
+            "Evaluate one strict runtime_review.json over twelve retained evidence cells and "
+            "publish a full-horizon native-runtime replacement decision."
+        ),
+    )
+    runtime_review.add_argument("configuration", help="path to runtime_review.json")
+    runtime_review_run = subcommands.add_parser(
+        "run-runtime-review",
+        help="create twelve native evidence cells and immediately run Runtime Review",
+        description=(
+            "Use two already-prepared explicit Python profiles to run two native identity "
+            "preflights and twelve sequential evidence cells, then call the existing Runtime "
+            "Review evaluator. Metrifid never discovers, creates, or installs an environment."
+        ),
+    )
+    runtime_review_run.add_argument("configuration", help="path to runtime_review_run.json")
     return parser
 
 
@@ -88,6 +136,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _run_audit(arguments.configuration)
     if operation == "certify":
         return _run_certify(arguments)
+    if operation == "review-model":
+        return _run_review_model(arguments)
+    if operation == "qualify-workload":
+        return _run_qualify_workload(arguments.configuration)
+    if arguments.command == "review-runtime":
+        return _run_review_runtime(arguments.configuration)
+    if arguments.command == "run-runtime-review":
+        return _run_runtime_review_execution(arguments.configuration)
     try:
         from .compare import ComparisonOperationError, compare_configuration_file
 
@@ -116,6 +172,12 @@ _OPERATIONS: dict[str, str] = {
     "compare": "compare",
     "audit-timestep": "audit-timestep",
     "certify": "certify",
+    "review-model": "review-model",
+    "qualify-workload": "qualify-workload",
+    # The operational-failure registry is deliberately frozen. Runtime Review is data-only and
+    # reuses the existing bounded comparison failure ABI while keeping its own completed statuses.
+    "review-runtime": "compare",
+    "run-runtime-review": "compare",
 }
 
 
@@ -194,6 +256,133 @@ def _run_certify(arguments: argparse.Namespace) -> int:
         + b"\n"
     )
     return certify_exit_code(result.status)
+
+
+def _run_review_model(arguments: argparse.Namespace) -> int:
+    """Publish one static model release review, or emit its strict failure."""
+    try:
+        from .model_release import (
+            ModelReleaseOperationError,
+            model_release_exit_code,
+            review_model_release,
+        )
+    except Exception as exc:  # defensive boundary
+        return _emit_failure(_internal_failure(exc, "review-model"))
+    try:
+        result = review_model_release(
+            arguments.baseline,
+            arguments.candidate,
+            arguments.policy,
+            arguments.output,
+            baseline_root=arguments.baseline_root,
+            candidate_root=arguments.candidate_root,
+        )
+    except DistributionIdentityError as exc:
+        return _emit_failure(exc.to_operational_failure("review-model"))
+    except ModelReleaseOperationError as exc:
+        return _emit_failure(exc.failure)
+    except Exception as exc:  # defensive boundary
+        return _emit_failure(_internal_failure(exc, "review-model"))
+    sys.stdout.buffer.write(
+        canonical_json_bytes(
+            {
+                "status": result.status.value,
+                "receipt_sha256": result.receipt_sha256,
+                "model_release_json": result.model_release_json.name,
+                "model_release_markdown": result.model_release_markdown.name,
+            }
+        )
+        + b"\n"
+    )
+    return model_release_exit_code(result.status)
+
+
+def _run_qualify_workload(configuration: str) -> int:
+    """Publish one workload qualification, or emit its strict operational failure."""
+    try:
+        from .compare import ComparisonOperationError
+        from .workload_qualification import qualify_configuration_file
+
+        result = qualify_configuration_file(configuration)
+    except DistributionIdentityError as exc:
+        return _emit_failure(exc.to_operational_failure("qualify-workload"))
+    except ComparisonOperationError as exc:
+        return _emit_failure(exc.failure)
+    except Exception as exc:  # defensive boundary
+        return _emit_failure(_internal_failure(exc, "qualify-workload"))
+    sys.stdout.buffer.write(
+        canonical_json_bytes(
+            {
+                "status": result.status.value,
+                "receipt_sha256": result.receipt_sha256,
+                "workload_qualification_json": str(result.qualification_json),
+                "workload_qualification_markdown": str(result.qualification_markdown),
+            }
+        )
+        + b"\n"
+    )
+    return result.exit_code
+
+
+def _run_review_runtime(configuration: str) -> int:
+    """Publish one full-horizon runtime review or its bounded comparison failure."""
+    try:
+        from .runtime_review import (
+            RuntimeReviewOperationError,
+            review_runtime_configuration_file,
+        )
+
+        result = review_runtime_configuration_file(configuration)
+    except DistributionIdentityError as exc:
+        return _emit_failure(exc.to_operational_failure("compare"))
+    except RuntimeReviewOperationError as exc:
+        return _emit_failure(exc.failure)
+    except Exception as exc:  # defensive boundary
+        return _emit_failure(_internal_failure(exc, "compare"))
+    sys.stdout.buffer.write(
+        canonical_json_bytes(
+            {
+                "receipt_sha256": result.receipt_sha256,
+                "runtime_review_json": result.runtime_review_json.name,
+                "runtime_review_markdown": result.runtime_review_markdown.name,
+                "status": result.status.value,
+            }
+        )
+        + b"\n"
+    )
+    return result.exit_code
+
+
+def _run_runtime_review_execution(configuration: str) -> int:
+    """Create native evidence and publish its existing Runtime Review decision."""
+    try:
+        from .runtime_review import (
+            RuntimeReviewOperationError,
+            run_runtime_review_configuration_file,
+        )
+
+        result = run_runtime_review_configuration_file(configuration)
+    except DistributionIdentityError as exc:
+        return _emit_failure(exc.to_operational_failure("compare"))
+    except RuntimeReviewOperationError as exc:
+        return _emit_failure(exc.failure)
+    except Exception as exc:  # defensive boundary
+        return _emit_failure(_internal_failure(exc, "compare"))
+    sys.stdout.buffer.write(
+        canonical_json_bytes(
+            {
+                "reason_code": (None if result.reason_code is None else result.reason_code.value),
+                "receipt_sha256": result.receipt_sha256,
+                "run_sha256": result.run_sha256,
+                "runtime_review_json": str(result.runtime_review_json),
+                "runtime_review_markdown": str(result.runtime_review_markdown),
+                "runtime_review_run_json": str(result.runtime_review_run_json),
+                "status": result.status.value,
+            }
+        )
+        + b"\n"
+    )
+    return result.exit_code
 
 
 def _invocation_failure(message: str, operation: str = "compare") -> OperationalFailure:

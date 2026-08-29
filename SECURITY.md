@@ -2,13 +2,17 @@
 
 ## Supported versions
 
-Security fixes are applied to the current `0.2.1` release. Older development snapshots and
-previous releases are not patched.
+Security fixes are applied to the newest published release on PyPI. Earlier releases,
+development snapshots, and unpublished source states are not patched.
 
 | Version | Supported |
 | --- | --- |
-| `0.2.1` | yes |
-| older versions and development snapshots | no |
+| the newest published release | yes |
+| earlier releases, development snapshots, and unpublished source states | no |
+
+Naming a fixed version here would go stale the moment the next one is published, so the policy is
+stated in terms of the newest published release. The release list on PyPI and the repository's
+GitHub releases say which version that currently is.
 
 ## Reporting a vulnerability
 

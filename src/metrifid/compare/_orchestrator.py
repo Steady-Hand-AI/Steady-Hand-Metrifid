@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 from dataclasses import dataclass
 from fractions import Fraction
 from pathlib import Path
@@ -52,6 +53,7 @@ from ._monitoring import monitored_joints_from_config
 from ._mujoco_backend import MuJoCoBackend, observed_threadpool_state
 from ._output import (
     OutputDirectory,
+    _adopt_output_directory,
     cleanup_output_after_failure,
     prepare_output_directory,
     publish_results,
@@ -112,6 +114,37 @@ def _compare_configuration_file_with_candidate_timestep(
     declared candidate timestep, or when the two roles are not the same source model.
     """
     return _run_comparison(config_path, candidate_step_dt)
+
+
+def _compare_into_owned_output(
+    *,
+    config_path: Path,
+    config_raw: bytes,
+    output_directory_fd: int,
+    output_display_path: Path,
+) -> ComparisonRunResult:
+    """Run one ordinary comparison that publishes into a directory the caller already owns.
+
+    This is the private seam workload qualification uses. A campaign cell has already created and
+    retained the directory its comparison must write into, so handing the descriptor keeps the
+    publication inside that exact object; handing a pathname would let the object be replaced
+    between the check and the write. The retained configuration bytes are supplied for the same
+    reason, so the comparison admits the bytes the campaign retained rather than whatever the
+    pathname resolves to a second time.
+
+    Nothing else changes: the same strict configuration schema, the same model and workload
+    admission, the same output-versus-model-root separation, the same execution, and the same
+    failure accounting run as for the public entry point.
+
+    It is deliberately private: no `__all__` entry, no package export, no CLI argument, and no
+    public schema.
+    """
+    return _run_comparison(
+        config_path,
+        None,
+        config_raw=config_raw,
+        owned_output=(output_directory_fd, output_display_path),
+    )
 
 
 def _compare_frozen_campaign_candidate(
@@ -376,12 +409,18 @@ def _runtime_evidence(
 def _run_comparison(
     config_path: str | Path,
     candidate_step_dt: ExactRational | None,
+    *,
+    config_raw: bytes | None = None,
+    owned_output: tuple[int, Path] | None = None,
 ) -> ComparisonRunResult:
     """Shared comparison implementation behind the public and private entry points."""
     distribution_sha = installed_distribution_sha256()
     tool_observation = _comparison_tool(distribution_sha)
     path = Path(config_path)
-    config_raw, config = _load_config(path, tool_observation)
+    if config_raw is None:
+        config_raw, config = _load_config(path, tool_observation)
+    else:
+        config = _admit_config_bytes(config_raw, tool_observation)
     input_digests: list[InputDigest] = [
         InputDigest(InputDigestCode.CONFIGURATION_RAW, hashlib.sha256(config_raw).hexdigest())
     ]
@@ -393,7 +432,11 @@ def _run_comparison(
         candidate_root = _resolve(base, config.candidate.model_root)
         output_path = _resolve(base, config.output_dir)
         _require_output_outside_model_roots(output_path, (baseline_root, candidate_root))
-        output = prepare_output_directory(output_path)
+        if owned_output is None:
+            output = prepare_output_directory(output_path)
+        else:
+            owned_fd, owned_path = owned_output
+            output = _adopt_output_directory(owned_path, os.dup(owned_fd))
         result = _execute_comparison(
             path,
             config_raw,
@@ -542,9 +585,14 @@ def _load_config(path: Path, tool: OperationalToolObservation) -> tuple[bytes, C
             field="comparison_config",
             evidence={"exception_type": type(exc).__name__},
         ) from exc
+    return raw, _admit_config_bytes(raw, tool)
+
+
+def _admit_config_bytes(raw: bytes, tool: OperationalToolObservation) -> ComparisonConfig:
+    """Admit one exact configuration byte string through the strict comparison schema."""
     try:
         primitive = bounded_strict_json_loads(raw, CONFIG_JSON_LIMITS)
-        return raw, ComparisonConfig.from_primitive(primitive)
+        return ComparisonConfig.from_primitive(primitive)
     except (TypeError, ValueError, UnicodeError) as exc:
         raise operational_error(
             tool=tool,

@@ -1,0 +1,12 @@
+<mujoco model="workload_qualification_example">
+  <option timestep="0.001"/>
+  <worldbody>
+    <body name="arm" pos="0 0 1">
+      <geom name="link" type="capsule" size="0.04 0.2" mass="1.5"/>
+      <joint name="shoulder" type="hinge" axis="0 1 0" damping="0.025"/>
+    </body>
+  </worldbody>
+  <actuator>
+    <motor name="shoulder_motor" joint="shoulder" gear="1"/>
+  </actuator>
+</mujoco>

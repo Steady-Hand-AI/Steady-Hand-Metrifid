@@ -24,13 +24,21 @@ from ._model_descriptors import ActuatorDescriptor as ActuatorDescriptor
 from ._model_descriptors import CompiledModelIdentity as CompiledModelIdentity
 from ._model_descriptors import JointDescriptor as JointDescriptor
 from ._model_descriptors import compile_model_identity as compile_model_identity
+from ._mujoco_runtime import MujocoClaimSurface as MujocoClaimSurface
+from ._mujoco_runtime import MujocoRuntimeAdmission as MujocoRuntimeAdmission
+from ._mujoco_runtime import MujocoSupportTier as MujocoSupportTier
+from ._mujoco_runtime import admit_mujoco_runtime as admit_mujoco_runtime
 
 __all__ = [
     "ActuatorDescriptor",
     "CompiledModelIdentity",
     "JointDescriptor",
+    "MujocoClaimSurface",
+    "MujocoRuntimeAdmission",
+    "MujocoSupportTier",
     "admit_compiled_model",
     "admit_external_implementation_free_model",
+    "admit_mujoco_runtime",
     "compile_model_identity",
     "compile_snapshot_model",
     "require_supported_runtime",

@@ -8,7 +8,13 @@ from typing import cast
 
 import mujoco  # type: ignore[import-untyped]
 
-from ._model_closure import _ACTIVATION_LAYOUT_WIDTHS, JointType, ModelRole, refuse
+from ._model_closure import (
+    _ACTIVATION_LAYOUT_WIDTHS,
+    ActivationFamily,
+    JointType,
+    ModelRole,
+    refuse,
+)
 from ._model_descriptor_types import (
     ActuatorDescriptor,
     CompiledModelIdentity,
@@ -20,33 +26,53 @@ from .json_values import CanonicalValue, require_sha256
 from .operational import OperationalReasonCode
 from .schemas import TargetReference
 
-_JOINT_TYPES: dict[int, tuple[JointType, int, int]] = {
-    int(mujoco.mjtJoint.mjJNT_FREE): ("FREE", 7, 6),
-    int(mujoco.mjtJoint.mjJNT_BALL): ("BALL", 4, 3),
-    int(mujoco.mjtJoint.mjJNT_SLIDE): ("SLIDE", 1, 1),
-    int(mujoco.mjtJoint.mjJNT_HINGE): ("HINGE", 1, 1),
-}
-_DYN, _LAYOUTS = mujoco.mjtDyn, _ACTIVATION_LAYOUT_WIDTHS
-_ACTIVATION_FAMILIES = {int(getattr(_DYN, f"mjDYN_{x}")): x for x in _LAYOUTS}
-_TRANSMISSIONS: dict[int, str] = {
-    int(mujoco.mjtTrn.mjTRN_JOINT): "JOINT",
-    int(mujoco.mjtTrn.mjTRN_JOINTINPARENT): "JOINTINPARENT",
-    int(mujoco.mjtTrn.mjTRN_SLIDERCRANK): "SLIDERCRANK",
-    int(mujoco.mjtTrn.mjTRN_TENDON): "TENDON",
-    int(mujoco.mjtTrn.mjTRN_SITE): "SITE",
-    int(mujoco.mjtTrn.mjTRN_BODY): "BODY",
-}
-_OBJECTS: dict[int, tuple[str, str]] = {
-    int(mujoco.mjtObj.mjOBJ_JOINT): ("njnt", "JOINT"),
-    int(mujoco.mjtObj.mjOBJ_TENDON): ("ntendon", "TENDON"),
-    int(mujoco.mjtObj.mjOBJ_SITE): ("nsite", "SITE"),
-    int(mujoco.mjtObj.mjOBJ_BODY): ("nbody", "BODY"),
-}
+
+def _joint_types() -> dict[int, tuple[JointType, int, int]]:
+    """Resolve the admitted runtime's joint enum values only at descriptor execution."""
+    joint = mujoco.mjtJoint
+    return {
+        int(joint.mjJNT_FREE): ("FREE", 7, 6),
+        int(joint.mjJNT_BALL): ("BALL", 4, 3),
+        int(joint.mjJNT_SLIDE): ("SLIDE", 1, 1),
+        int(joint.mjJNT_HINGE): ("HINGE", 1, 1),
+    }
+
+
+def _activation_families() -> dict[int, ActivationFamily]:
+    """Resolve admitted actuator-dynamics enums without eager module-level binding."""
+    return {
+        int(getattr(mujoco.mjtDyn, f"mjDYN_{family}")): family
+        for family in _ACTIVATION_LAYOUT_WIDTHS
+    }
+
+
+def _transmissions() -> dict[int, str]:
+    """Resolve admitted actuator-transmission enums at descriptor execution."""
+    transmission = mujoco.mjtTrn
+    return {
+        int(transmission.mjTRN_JOINT): "JOINT",
+        int(transmission.mjTRN_JOINTINPARENT): "JOINTINPARENT",
+        int(transmission.mjTRN_SLIDERCRANK): "SLIDERCRANK",
+        int(transmission.mjTRN_TENDON): "TENDON",
+        int(transmission.mjTRN_SITE): "SITE",
+        int(transmission.mjTRN_BODY): "BODY",
+    }
+
+
+def _objects() -> dict[int, tuple[str, str]]:
+    """Resolve admitted object enums and their model-count projections lazily."""
+    object_type = mujoco.mjtObj
+    return {
+        int(object_type.mjOBJ_JOINT): ("njnt", "JOINT"),
+        int(object_type.mjOBJ_TENDON): ("ntendon", "TENDON"),
+        int(object_type.mjOBJ_SITE): ("nsite", "SITE"),
+        int(object_type.mjOBJ_BODY): ("nbody", "BODY"),
+    }
 
 
 def _count_model_object_names(model: mujoco.MjModel, object_type: int) -> Counter[str]:
     """Count nonempty compiled semantic names for one MuJoCo object type."""
-    count = int(getattr(model, _OBJECTS[object_type][0]))
+    count = int(getattr(model, _objects()[object_type][0]))
     return Counter(
         name for index in range(count) if (name := mujoco.mj_id2name(model, object_type, index))
     )
@@ -60,7 +86,7 @@ def _resolve_actuator_target_reference(
     actuator: int,
 ) -> TargetReference:
     """Resolve one compiled transmission target to its unique named model object."""
-    count_attribute, token = _OBJECTS[object_type]
+    count_attribute, token = _objects()[object_type]
     count = int(getattr(model, count_attribute))
     if index < 0 or index >= count:
         raise refuse(
@@ -143,7 +169,7 @@ def _joint_descriptors(model: mujoco.MjModel, role: ModelRole) -> tuple[JointDes
         )
     descriptors: list[JointDescriptor] = []
     for index, name in enumerate(joint_names):
-        data = _JOINT_TYPES.get(int(model.jnt_type[index]))
+        data = _joint_types().get(int(model.jnt_type[index]))
         if data is None:
             raise refuse(
                 OperationalReasonCode.MODEL_LAYOUT_INCOMPATIBLE,
@@ -187,8 +213,8 @@ def _actuator_descriptor(
     model: mujoco.MjModel, role: ModelRole, index: int, name: str | None
 ) -> ActuatorDescriptor:
     """Build and validate one compiled-model actuator descriptor."""
-    transmission = _TRANSMISSIONS.get(int(model.actuator_trntype[index]))
-    family = _ACTIVATION_FAMILIES.get(int(model.actuator_dyntype[index]))
+    transmission = _transmissions().get(int(model.actuator_trntype[index]))
+    family = _activation_families().get(int(model.actuator_dyntype[index]))
     if transmission is None or family is None:
         raise refuse(
             OperationalReasonCode.MODEL_LAYOUT_INCOMPATIBLE,

@@ -1,4 +1,4 @@
-"""Concrete MuJoCo 3.10.0 stepping adapter for the comparison replay core."""
+"""Concrete admitted-MuJoCo stepping adapter for the comparison replay core."""
 
 from __future__ import annotations
 

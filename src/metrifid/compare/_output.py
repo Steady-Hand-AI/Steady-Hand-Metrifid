@@ -8,6 +8,7 @@ from pathlib import Path
 from .._atomic_output import (
     PairedOutputDirectory,
     PairedOutputNames,
+    _adopt_paired_output_descriptor,
     cleanup_paired_output_after_failure,
     prepare_paired_output_directory,
     publish_paired_results,
@@ -94,6 +95,17 @@ class OutputDirectory:
 def prepare_output_directory(path: Path) -> OutputDirectory:
     """Create an absent final directory or admit one empty real directory."""
     return OutputDirectory(prepare_paired_output_directory(path, COMPARISON_OUTPUT_NAMES))
+
+
+def _adopt_output_directory(path: Path, descriptor: int) -> OutputDirectory:
+    """Adopt one already-retained empty directory descriptor as this comparison's output.
+
+    Used where the caller already owns the destination object and must not hand a pathname across
+    the boundary. The supplied descriptor is owned from here on.
+    """
+    return OutputDirectory(
+        _adopt_paired_output_descriptor(path, COMPARISON_OUTPUT_NAMES, descriptor)
+    )
 
 
 def publish_results(

@@ -1,0 +1,9 @@
+{
+  "schema": "metrifid.runtime_review_run_config",
+  "schema_version": 1,
+  "baseline_python": "/replace/with/baseline/profile/bin/python",
+  "candidate_python": "/replace/with/candidate/profile/bin/python",
+  "manifest": "manifest.json",
+  "fixture_id": "smooth_pendulum",
+  "output_dir": "runtime_review_run_output"
+}

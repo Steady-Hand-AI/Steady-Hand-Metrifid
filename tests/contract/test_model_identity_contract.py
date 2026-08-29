@@ -247,37 +247,47 @@ def test_a_missing_required_open_flag_refuses(monkeypatch: pytest.MonkeyPatch) -
 
 
 @pytest.mark.parametrize(
-    "package_version",
-    ["3.10.0", "3.10.0.post1", "3.10.0.post0", "3.10.0+local", "3.10.0.post2+build.7"],
+    ("package_version", "native_version", "native_integer"),
+    [
+        pytest.param("3.9.0", "3.9.0", 3_009_000, id="oldest_validated"),
+        pytest.param("3.10.0", "3.10.0", 3_010_000, id="prior_validated"),
+        pytest.param("3.11.0", "3.11.0", 3_011_000, id="current_validated"),
+        pytest.param("3.12.0", "3.12.0", 3_012_000, id="latest_validated"),
+        pytest.param("3.12.0.post1", "3.12.0", 3_012_000, id="post_build"),
+        pytest.param("3.13.0+local", "3.13.0", 3_013_000, id="future_compatible"),
+    ],
 )
-def test_stable_mujoco_engine_family_is_admitted(
-    monkeypatch: pytest.MonkeyPatch, package_version: str
+def test_stable_coherent_mujoco_runtime_is_admitted(
+    monkeypatch: pytest.MonkeyPatch,
+    package_version: str,
+    native_version: str,
+    native_integer: int,
 ) -> None:
-    """Admit the stable 3.10.0 family, including binding-only post releases and local builds."""
+    """Admit stable coherent validated, rebuilt, and future-capable runtime identities."""
     _admit_platform(monkeypatch)
     monkeypatch.setattr(model_compile.mujoco, "__version__", package_version)
+    monkeypatch.setattr(model_compile.mujoco, "mj_versionString", lambda: native_version)
+    monkeypatch.setattr(model_compile.mujoco, "mj_version", lambda: native_integer)
     admission.require_supported_runtime()
 
 
 @pytest.mark.parametrize(
     "package_version",
     [
-        "3.10.0rc1",
-        "3.10.0a1",
-        "3.10.0b2",
-        "3.10.0.dev0",
-        "3.10.0.post1.dev0",
-        "3.10.1",
-        "3.11.0",
-        "3.10",
-        "4.0.0",
-        "",
+        pytest.param("3.10.0rc1", id="unstable_rc"),
+        pytest.param("3.10.0a1", id="unstable_alpha"),
+        pytest.param("3.10.0b2", id="unstable_beta"),
+        pytest.param("3.10.0.dev0", id="development"),
+        pytest.param("3.10.0.post1.dev0", id="post_development"),
+        pytest.param("3.8.9", id="below_floor"),
+        pytest.param("3.10", id="missing_patch"),
+        pytest.param("", id="empty_token"),
     ],
 )
-def test_mujoco_packages_outside_the_engine_family_refuse(
+def test_unstable_malformed_or_below_floor_mujoco_packages_refuse(
     monkeypatch: pytest.MonkeyPatch, package_version: str
 ) -> None:
-    """Refuse prerelease, development, and any non-3.10.0 MuJoCo distribution version."""
+    """Refuse prerelease, development, malformed, and below-floor package identities."""
     _admit_platform(monkeypatch)
     monkeypatch.setattr(model_compile.mujoco, "__version__", package_version)
     with pytest.raises(closure.ModelAdmissionRefusal) as exc:
@@ -296,7 +306,7 @@ def test_a_non_string_mujoco_version_refuses(monkeypatch: pytest.MonkeyPatch) ->
 
 
 def test_package_and_native_engine_mismatch_refuses(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Refuse an accepted package version whose loaded native engine is not 3.10.0."""
+    """Refuse an admitted package whose loaded native engine reports another base."""
     _admit_platform(monkeypatch)
     monkeypatch.setattr(model_compile.mujoco, "__version__", "3.10.0.post1")
     monkeypatch.setattr(model_compile.mujoco, "mj_versionString", lambda: "3.9.0")
@@ -638,7 +648,7 @@ def test_no_native_index_selector_exists() -> None:
 #
 # The precheck reads the measured entrypoint through the same no-follow, size- and hash-verified
 # path as dependency discovery, requires the first complete top-level element to be `mujoco`, and
-# ignores trailing bytes. MuJoCo 3.10.0 remains the final syntax and compile authority.
+# ignores trailing bytes. The admitted stable MuJoCo runtime remains the syntax and compile authority.
 # ==============================================================================================
 
 

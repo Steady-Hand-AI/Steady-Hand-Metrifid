@@ -92,7 +92,7 @@ Limits that come with it:
   execution imply identical simulation, but this command verifies none of those premises.
 - It says nothing about source text, licensing or visual intent.
 - It covers **these four entrypoints at these two revisions** and nothing else. No claim is made
-  about any other Menagerie model or any other revision. A repository-wide report is future work
-  and does not exist yet.
+  about any other Menagerie model or any other revision, and the case makes no repository-wide
+  coverage claim.
 
 For the full contract see [`compiled_certification.md`](compiled_certification.md).

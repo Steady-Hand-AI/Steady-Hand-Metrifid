@@ -1,4 +1,4 @@
-"""Model text and workload helpers shared by the three SDK example scripts.
+"""Model text and workload helpers shared by the SDK example scripts.
 
 Each example is runnable on its own from any directory, so everything it needs is built here from
 literals rather than read from the repository. Nothing in this module imports a private Metrifid

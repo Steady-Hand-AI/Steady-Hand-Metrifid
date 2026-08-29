@@ -88,7 +88,13 @@ These collections are decision-bearing and therefore participate in their enclos
 
 The installed-distribution identity is not the wheel archive hash and never falls back to a source-tree hash. It binds the code that is actually imported to one normal installed `metrifid` distribution.
 
-Canonicalization, the exact-number helpers, and receipt parsing and validation are pure: they never invoke the shared native runtime gate, so they work under Python 3.11 or newer without MuJoCo admission, on Linux, on macOS, and on Windows. Commands that compile or step a model do require that gate, and native Windows is unsupported for them; WSL is the documented route. Release evidence for those commands is produced from a noneditable wheel, and the MuJoCo native engine is 3.10.0 exactly.
+Canonicalization, the exact-number helpers, and receipt parsing and validation are pure: they never
+invoke the shared native runtime gate, so they work under Python 3.11 or newer without MuJoCo
+admission, on Linux, on macOS, and on Windows. Commands that compile or step a model do require that
+gate, and native Windows is unsupported for them; WSL is the documented route. Those commands use
+the exact admitted package/native runtime and bind its identity to evidence. The resolver-selected
+newest stable MuJoCo is the primary development and release profile—3.12.0 for the frozen 2026-08-22
+snapshot—while exact retained older profiles remain compatibility-tested.
 
 ### Root and manifest binding
 

@@ -1,0 +1,1 @@
+{"case_order":["collision_filtering.mask_flattening","collision_filtering.explicit_pair_loss","collision_filtering.exclusion_loss","mesh_inertia.mode_change","actuator_transmission.frame_change","sensor_attachment.site_change"],"schema":"metrifid.public_case_index","schema_version":1}

@@ -10,8 +10,9 @@ Every build here is isolated PEP 517, which is what a real consumer's `pip insta
 
 from __future__ import annotations
 
+import ast
+import hashlib
 import re
-import shutil
 import subprocess
 import sys
 import tarfile
@@ -35,8 +36,11 @@ _REQUIRED_SDIST_MEMBERS = (
     ".github/quality-constraints.txt",
     "pyproject.toml",
     "tools/mjb_characterization.py",
+    "tools/native_upgrade_profile_worker.py",
 )
 _COMPARED_METADATA_FIELDS = ("Name", "Version", "Summary", "Requires-Python")
+_FROZEN_WORKER_RESOURCE = "metrifid/runtime_review/native_evidence_worker.py.txt"
+_FROZEN_WORKER_SHA256 = "b00e509a344593806c088c4e49783ed71bacd815466d74bce9e27c931535b4ff"
 
 
 def _repository_root() -> Path:
@@ -44,24 +48,51 @@ def _repository_root() -> Path:
     return Path(__file__).resolve().parents[2]
 
 
+def _authoritative_source_version() -> str:
+    """Read the package version from its single source-controlled assignment."""
+    version_path = _repository_root() / "src" / "metrifid" / "version.py"
+    module = ast.parse(version_path.read_text(encoding="utf-8"), filename=str(version_path))
+    values: list[str] = []
+    for statement in module.body:
+        if not isinstance(statement, ast.Assign):
+            continue
+        if not any(
+            isinstance(target, ast.Name) and target.id == "__version__"
+            for target in statement.targets
+        ):
+            continue
+        value = ast.literal_eval(statement.value)
+        assert isinstance(value, str)
+        values.append(value)
+    assert len(values) == 1, values
+    return values[0]
+
+
 def _build(source: Path, outdir: Path, *, wheel_only: bool = False) -> None:
-    """Build distributions from one source tree through isolated PEP 517."""
+    """Build distributions from one source tree through isolated PEP 517.
+
+    A failed build fails this gate. Treating a nonzero exit as a skip made every backend, metadata,
+    packaging-membership and dependency-provisioning failure look like a green run, because a
+    skipped test still exits zero. An environment that cannot provision the declared build
+    requirements has not satisfied this contract; it has failed to run it.
+    """
     command = [sys.executable, "-m", "build"]
     if wheel_only:
         command.append("--wheel")
     command += ["--outdir", str(outdir), str(source)]
     completed = subprocess.run(command, check=False, capture_output=True, text=True, timeout=3600)
-    if completed.returncode != 0:  # pragma: no cover - surfaced as a skip or failure below
-        pytest.skip(
-            f"isolated build unavailable: {completed.stdout[-2000:]}{completed.stderr[-2000:]}"
+    if completed.returncode != 0:
+        pytest.fail(
+            f"isolated PEP 517 build of {source} exited {completed.returncode}\n"
+            f"--- stdout ---\n{completed.stdout[-2000:]}\n"
+            f"--- stderr ---\n{completed.stderr[-2000:]}",
+            pytrace=False,
         )
 
 
 @pytest.fixture(scope="module")
 def distributions(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Path]:
     """Build the direct wheel and sdist, then rebuild a wheel from the extracted sdist."""
-    if shutil.which(sys.executable) is None:  # pragma: no cover - environment guard
-        pytest.skip("no interpreter available for isolated builds")
     root: Path = tmp_path_factory.mktemp("distributions").resolve()
     direct = root / "direct"
     _build(_repository_root(), direct)
@@ -105,6 +136,20 @@ def _metadata(wheel: Path) -> Message:
     return BytesParser().parsebytes(_dist_info(wheel, "METADATA"))
 
 
+def _sdist_metadata(sdist: Path) -> Message:
+    """Parse the Core Metadata the sdist itself carries, from its single root `PKG-INFO`."""
+    with tarfile.open(sdist) as archive:
+        names = [
+            name
+            for name in archive.getnames()
+            if name.endswith("/PKG-INFO") and name.count("/") == 1
+        ]
+        assert len(names) == 1, names
+        extracted = archive.extractfile(names[0])
+        assert extracted is not None
+        return BytesParser().parsebytes(extracted.read())
+
+
 def _legal_file_bytes(wheel: Path, filename: str) -> bytes:
     """Return one PEP 639 legal file carried inside a wheel."""
     with zipfile.ZipFile(wheel) as archive:
@@ -134,7 +179,22 @@ def test_direct_wheel_package_bytes_match_the_candidate_source(
         for path in sorted((source / "metrifid").rglob("*"))
         if path.is_file() and "__pycache__" not in path.parts and path.suffix != ".pyc"
     }
+    expected[_FROZEN_WORKER_RESOURCE] = (
+        _repository_root() / "tools" / "native_upgrade_profile_worker.py"
+    ).read_bytes()
     assert _package_members(distributions["wheel"]) == expected
+
+
+def test_distribution_carries_the_frozen_evidence_worker(
+    distributions: dict[str, Path],
+) -> None:
+    """Bind both wheel routes to the exact authoritative standalone worker source."""
+    authoritative = (_repository_root() / "tools" / "native_upgrade_profile_worker.py").read_bytes()
+    assert hashlib.sha256(authoritative).hexdigest() == _FROZEN_WORKER_SHA256
+    assert _package_members(distributions["wheel"])[_FROZEN_WORKER_RESOURCE] == authoritative
+    assert _package_members(distributions["rebuilt"])[_FROZEN_WORKER_RESOURCE] == authoritative
+    extracted_worker = distributions["unpacked"] / "tools" / "native_upgrade_profile_worker.py"
+    assert extracted_worker.read_bytes() == authoritative
 
 
 def test_direct_and_rebuilt_wheels_carry_identical_package_members(
@@ -200,14 +260,24 @@ def test_distribution_metadata_identifies_license_and_owner(
         )
 
 
-def test_both_artifacts_report_the_numeric_release_version(
+def test_artifacts_report_the_authoritative_source_version(
     distributions: dict[str, Path],
 ) -> None:
-    """Use one three-integer version across the wheel, sdist, and rebuilt wheel."""
-    version = _metadata(distributions["wheel"]).get("Version")
-    assert version == "0.2.1"
-    assert re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version)
-    assert version == _metadata(distributions["rebuilt"]).get("Version")
+    """Match the one source-controlled version across every wheel and sdist route.
+
+    The grammar admits a canonical release form and a development form, because the same identity
+    contract has to hold on both sides of a release. What it does not admit is a second source of
+    truth: every route below is compared to the one assignment in `version.py`, not to each other,
+    and the sdist is read through its own metadata rather than through a name that could agree with
+    a stale document.
+    """
+    version = _authoritative_source_version()
+    assert re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+(?:\.dev[0-9]+)?", version)
+    assert _metadata(distributions["wheel"]).get("Version") == version
+    assert _metadata(distributions["rebuilt"]).get("Version") == version
+    # The sdist's own metadata bytes, not its filename and not the wheel rebuilt from it: those
+    # would agree with a stale PKG-INFO instead of contradicting it.
+    assert _sdist_metadata(distributions["sdist"]).get("Version") == version
     assert distributions["wheel"].name == f"metrifid-{version}-py3-none-any.whl"
     assert distributions["sdist"].name == f"metrifid-{version}.tar.gz"
     assert distributions["rebuilt"].name == f"metrifid-{version}-py3-none-any.whl"

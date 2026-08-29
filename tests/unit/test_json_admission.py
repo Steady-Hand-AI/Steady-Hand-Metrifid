@@ -8,6 +8,7 @@ boundary and at boundary-plus-one so a future change to either side is caught.
 from __future__ import annotations
 
 import os
+from decimal import Decimal
 from pathlib import Path
 
 import pytest
@@ -18,9 +19,31 @@ from metrifid._json_admission import (
     JsonAdmissionError,
     JsonAdmissionLimits,
     bounded_strict_json_loads,
+    enforce_json_structure,
     read_bounded_regular_file,
     read_bounded_strict_json,
 )
+
+
+def _nested_value(depth: int) -> object:
+    """Return an object whose deepest leaf sits exactly ``depth`` levels below the root.
+
+    The deep member is inserted first so that the shallow sibling scalar is the first leaf the
+    iterative walk pops. A walk that stopped at its first non-container value would admit this
+    document, so the sibling is load-bearing: do not reorder these two members.
+    """
+    value: object = 0
+    for _ in range(depth - 1):
+        value = [value]
+    return {"deep": value, "shallow": 0}
+
+
+def _document_of_node_count(nodes: int) -> str:
+    """Return one strict JSON object counting exactly ``nodes`` values and member names."""
+    if nodes < 3:
+        raise ValueError("a root object with one array member counts at least three nodes")
+    return '{"n":[' + ",".join("0" for _ in range(nodes - 3)) + "]}"
+
 
 _ROOMY = JsonAdmissionLimits(
     max_bytes=1 << 20, max_depth=64, max_nodes=100_000, max_string_bytes=1 << 16
@@ -164,6 +187,102 @@ def test_deeply_nested_document_refuses_without_crashing() -> None:
     document = "[" * 5000 + "]" * 5000
     with pytest.raises(JsonAdmissionError):
         bounded_strict_json_loads(document, CONFIG_JSON_LIMITS)
+
+
+def test_the_shared_bound_admits_the_exact_depth_and_refuses_one_level_more() -> None:
+    """Apply the declared depth policy to an already-parsed document, not the parser's stack."""
+    enforce_json_structure(_nested_value(_ROOMY.max_depth), _ROOMY)
+    with pytest.raises(JsonAdmissionError):
+        enforce_json_structure(_nested_value(_ROOMY.max_depth + 1), _ROOMY)
+
+
+def test_the_shared_bound_admits_the_exact_node_count_and_refuses_one_node_more() -> None:
+    """Count the root container plus every member, at the boundary and one past it."""
+    limits = JsonAdmissionLimits(max_bytes=1 << 20, max_depth=8, max_nodes=8, max_string_bytes=64)
+    enforce_json_structure([0] * (limits.max_nodes - 1), limits)
+    with pytest.raises(JsonAdmissionError):
+        enforce_json_structure([0] * limits.max_nodes, limits)
+
+
+def test_the_shared_bound_measures_keys_and_values_in_utf8_bytes() -> None:
+    """Bound both member names and string values at the exact byte boundary."""
+    limits = JsonAdmissionLimits(max_bytes=1 << 20, max_depth=8, max_nodes=64, max_string_bytes=6)
+    multibyte = "\u00e9" * (limits.max_string_bytes // 2)  # two UTF-8 bytes per character
+    enforce_json_structure({"k": multibyte}, limits)
+    with pytest.raises(JsonAdmissionError):
+        enforce_json_structure({"k": multibyte + "x"}, limits)
+    enforce_json_structure({"k" * limits.max_string_bytes: 0}, limits)
+    with pytest.raises(JsonAdmissionError):
+        enforce_json_structure({"k" * (limits.max_string_bytes + 1): 0}, limits)
+
+
+def test_the_shared_bound_returns_binary64_and_decimal_leaves_unchanged() -> None:
+    """Leave both numeric representations a private caller may have parsed exactly as they are.
+
+    Runtime-review evidence decodes worker results with binary64 floats and input manifests with
+    lexical decimals. Reusing this bound must not quietly normalise either one.
+    """
+    binary64 = 0.1 + 0.2
+    lexical = Decimal("0.020000000000000001")
+    document = {"float": binary64, "decimal": lexical, "nested": [binary64, lexical]}
+
+    enforce_json_structure(document, _ROOMY)
+
+    assert document["float"] is binary64
+    assert document["decimal"] is lexical
+    assert type(document["float"]) is float
+    assert type(document["decimal"]) is Decimal
+
+
+def test_the_file_loader_applies_exactly_the_shared_bound() -> None:
+    """Keep one structural authority: the loader refuses precisely what the shared bound refuses."""
+    limits = JsonAdmissionLimits(max_bytes=1 << 20, max_depth=3, max_nodes=64, max_string_bytes=64)
+    over = limits.max_depth + 1
+    enforce_json_structure(_nested_value(limits.max_depth), limits)
+    bounded_strict_json_loads("[" * limits.max_depth + "0" + "]" * limits.max_depth, limits)
+    with pytest.raises(JsonAdmissionError):
+        enforce_json_structure(_nested_value(over), limits)
+    with pytest.raises(JsonAdmissionError):
+        bounded_strict_json_loads("[" * over + "0" + "]" * over, limits)
+
+
+def test_the_shared_bound_is_the_whole_profile_and_not_only_its_depth() -> None:
+    """Refuse by node count and by member-name size too, so a depth-only check cannot pass here."""
+    limits = JsonAdmissionLimits(max_bytes=1 << 20, max_depth=8, max_nodes=12, max_string_bytes=8)
+    bounded_strict_json_loads(_document_of_node_count(limits.max_nodes), limits)
+    with pytest.raises(JsonAdmissionError):
+        bounded_strict_json_loads(_document_of_node_count(limits.max_nodes + 1), limits)
+    bounded_strict_json_loads('{"' + "k" * limits.max_string_bytes + '":0}', limits)
+    with pytest.raises(JsonAdmissionError):
+        bounded_strict_json_loads('{"' + "k" * (limits.max_string_bytes + 1) + '":0}', limits)
+
+
+def test_text_with_no_strict_utf8_encoding_refuses_with_its_cause_preserved() -> None:
+    """Refuse an escaped lone surrogate as a typed admission error, not a raw encoding error.
+
+    ``json`` accepts the escape and produces a ``str`` that cannot be encoded, so measuring it
+    raises ``UnicodeEncodeError``. That is a parser-shaped exception escaping an admission
+    boundary; every caller here translates :class:`JsonAdmissionError`, so it has to be one.
+    """
+    for document in ('{"x":"\\ud800"}', '{"\\ud800":0}'):
+        with pytest.raises(JsonAdmissionError) as refusal:
+            bounded_strict_json_loads(document, _ROOMY)
+        assert isinstance(refusal.value.__cause__, UnicodeEncodeError)
+
+
+def test_the_shared_bound_refuses_an_unencodable_key_or_value_directly() -> None:
+    """Apply the same translation when a private caller reuses the shared walk on its own value."""
+    for document in ({"x": "\ud800"}, {"\ud800": 0}):
+        with pytest.raises(JsonAdmissionError) as refusal:
+            enforce_json_structure(document, _ROOMY)
+        assert isinstance(refusal.value.__cause__, UnicodeEncodeError)
+
+
+def test_valid_non_ascii_text_is_admitted_unchanged() -> None:
+    """Text that does have a UTF-8 encoding must be untouched by that translation."""
+    assert bounded_strict_json_loads('{"e":"\\ud83d\\ude00"}', _ROOMY) == {"e": "\U0001f600"}
+    assert bounded_strict_json_loads('{"e":"\U0001f600"}', _ROOMY) == {"e": "\U0001f600"}
+    assert bounded_strict_json_loads('{"e":"é中"}', _ROOMY) == {"e": "é中"}
 
 
 def test_regular_file_round_trip(tmp_path: Path) -> None:

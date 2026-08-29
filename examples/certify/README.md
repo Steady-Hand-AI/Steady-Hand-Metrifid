@@ -16,8 +16,6 @@ python -m pip install .
 python examples/certify/run_example.py
 ```
 
-After PyPI publication, `python -m pip install metrifid` can replace the source-install command.
-
 Expected output:
 
 ```text
@@ -31,11 +29,11 @@ The script runs the installed `metrifid` executable from a noneditable wheel, wr
 temporary directory, uses no network, and exits non-zero if any expectation is unmet.
 
 It needs an environment the shared runtime gate admits: Python 3.11 or newer on Linux or macOS with
-the required POSIX capabilities, and the MuJoCo native engine 3.10.0 exactly. Architecture is never
-rejected. Release CI is configured for CPython 3.11–3.14 on Linux x86_64, CPython 3.12 and 3.14
-on macOS arm64, and CPython 3.12 on macOS x86_64. A tuple is called validated only after its exact
-lane passes. Native Windows is unsupported; run it under WSL. Elsewhere `certify` refuses with exit
-64 rather than guessing.
+the required POSIX capabilities and a stable MuJoCo runtime at or above the 3.9 support floor.
+Metrifid binds the exact admitted runtime into the result; the newest stable runtime is the primary
+release profile and retained older profiles remain compatibility-tested. Architecture is never
+rejected. Native Windows is unsupported; run it under WSL. Elsewhere `certify` refuses with exit 64
+rather than guessing.
 
 ## The models
 

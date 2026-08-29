@@ -11,9 +11,13 @@ sets the report-level `truncated` flag. An unset flag means no cap was reached, 
 report enumerates every difference in the artifact.
 
 It reloads the two private artifacts rather than reusing the compiled models, so the fields it
-describes come from the same bytes the certificate compared. Each model is loaded, read and
-released on its own, so at most one model and one bounded set of captured baseline fields are
-resident at a time.
+describes come from the same bytes the certificate compared. Each subject is reached only through
+its own retained descriptor, never through a pathname, so a same-user process cannot make this
+report describe an object the certificate never measured.
+
+The fact-gathering passes load, read and release one model at a time. The witness pass needs to
+read one changed field from both roles at the same offset, so it is the single point at which two
+models are resident together; nothing is copied out of either beyond the field being described.
 """
 
 from __future__ import annotations
@@ -22,13 +26,13 @@ import hashlib
 import struct
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
-from pathlib import Path
 from typing import cast
 
 import mujoco  # type: ignore[import-untyped]
 import numpy as np
 
 from ..json_values import Binary64, CanonicalValue
+from ._artifact import ArtifactSubject, load_subject_model
 from ._bytes import ByteComparison
 from ._field_schema import (
     _CHANGED_FIELD_MEMBERS as _CHANGED_FIELD_MEMBERS,
@@ -76,7 +80,7 @@ class _FieldFacts:
 
 
 def build_field_report(
-    baseline_mjb: Path, candidate_mjb: Path, comparison: ByteComparison
+    baseline_mjb: ArtifactSubject, candidate_mjb: ArtifactSubject, comparison: ByteComparison
 ) -> dict[str, CanonicalValue]:
     """Describe, deterministically, where two differing artifacts differ publicly."""
     baseline_facts, omitted = _facts_from_artifact(baseline_mjb)
@@ -127,9 +131,11 @@ def _witnesses_truncated(entry: CanonicalValue) -> bool:
     return changed > len(witnesses)
 
 
-def _facts_from_artifact(path: Path) -> tuple[dict[str, _FieldFacts], list[tuple[str, str]]]:
-    """Load one artifact, measure every comparable public member, then release the model."""
-    model = mujoco.MjModel.from_binary_path(str(path))
+def _facts_from_artifact(
+    subject: ArtifactSubject,
+) -> tuple[dict[str, _FieldFacts], list[tuple[str, str]]]:
+    """Load one retained subject, measure every comparable public member, release the model."""
+    model = load_subject_model(subject)
     try:
         facts: dict[str, _FieldFacts] = {}
         omitted: list[tuple[str, str]] = []
@@ -221,8 +227,8 @@ def _scalar_payload(value: object) -> bytes:
 
 
 def _changed_entries(
-    baseline_mjb: Path,
-    candidate_mjb: Path,
+    baseline_mjb: ArtifactSubject,
+    candidate_mjb: ArtifactSubject,
     paths: list[str],
     baseline_facts: Mapping[str, _FieldFacts],
     candidate_facts: Mapping[str, _FieldFacts],
@@ -236,9 +242,9 @@ def _changed_entries(
     if not paths:
         return [], 0
     declined = 0
-    baseline_model = mujoco.MjModel.from_binary_path(str(baseline_mjb))
+    baseline_model = load_subject_model(baseline_mjb)
     try:
-        candidate_model = mujoco.MjModel.from_binary_path(str(candidate_mjb))
+        candidate_model = load_subject_model(candidate_mjb)
         try:
             entries: list[CanonicalValue] = []
             for path in sorted(paths):

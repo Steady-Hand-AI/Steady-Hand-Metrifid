@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import importlib.metadata as metadata
+import importlib.resources as resources
 import json
 import os
 import subprocess
@@ -14,6 +16,8 @@ from typing import cast
 
 import metrifid
 from metrifid.json_values import installed_distribution_identity, installed_distribution_sha256
+
+_FROZEN_WORKER_SHA256 = "b00e509a344593806c088c4e49783ed71bacd815466d74bce9e27c931535b4ff"
 
 
 def test_import_resolves_inside_environment_not_source_checkout() -> None:
@@ -40,6 +44,20 @@ def test_normal_installed_distribution_identity_succeeds() -> None:
     assert identity["distribution_version"] == metrifid.__version__
     assert len(digest) == 64
     assert digest != "0" * 64
+
+
+def test_installed_runtime_review_resources_are_private_and_exact() -> None:
+    """Carry the collector and frozen worker without advertising either as public SDK names."""
+    package = resources.files("metrifid.runtime_review")
+    worker = package.joinpath("native_evidence_worker.py.txt")
+    collector = package.joinpath("_native_profile_identity.py")
+    assert worker.is_file()
+    assert collector.is_file()
+    assert hashlib.sha256(worker.read_bytes()).hexdigest() == _FROZEN_WORKER_SHA256
+    import metrifid.runtime_review as runtime_review
+
+    assert "native_evidence_worker" not in runtime_review.__all__
+    assert "native_profile_identity" not in runtime_review.__all__
 
 
 def test_fresh_process_distribution_hash_is_stable(tmp_path: Path) -> None:
@@ -109,10 +127,28 @@ def test_installed_metrifid_help_exits_zero(tmp_path: Path) -> None:
     )
     assert result.returncode == 0, result.stderr
     assert "compare" in result.stdout
+    assert "run-runtime-review" in result.stdout
+
+
+def test_installed_runtime_review_execution_help_is_complete(tmp_path: Path) -> None:
+    """Describe prepared profiles, twelve cells, and the existing referee from the wheel."""
+    launcher = Path(sysconfig.get_path("scripts")) / "metrifid"
+    result = subprocess.run(
+        [str(launcher), "run-runtime-review", "--help"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    normalized = " ".join(result.stdout.split())
+    assert "two already-prepared explicit Python profiles" in normalized
+    assert "twelve sequential evidence cells" in normalized
+    assert "existing Runtime Review evaluator" in normalized
 
 
 def test_public_package_and_runtime_dependency_are_installed() -> None:
-    """Verify that the public package and its pinned MuJoCo runtime are installed."""
+    """Verify that the public package and its rolling MuJoCo floor are installed."""
     from importlib import import_module, metadata
 
     for module_name in (
@@ -129,6 +165,7 @@ def test_public_package_and_runtime_dependency_are_installed() -> None:
         for requirement in (metadata.requires("metrifid") or [])
         if "extra ==" not in requirement
     ]
-    assert "mujoco==3.10.0.*" in requirements
+    assert "mujoco>=3.9" in requirements
+    assert not [value for value in requirements if value.startswith("mujoco") and "<" in value]
     assert "numpy>=1.26" in requirements
     assert not [value for value in requirements if value.startswith("numpy") and "<" in value]

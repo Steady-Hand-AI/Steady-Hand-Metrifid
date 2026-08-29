@@ -205,7 +205,9 @@ def _validate_failure_contract(failure: OperationalFailure) -> None:
     if not isinstance(failure.tool, OperationalToolObservation):
         raise TypeError("tool must be an OperationalToolObservation")
     if failure.operation not in _OPERATIONS:
-        raise ValueError("operation must be compare, audit-timestep or certify")
+        raise ValueError(
+            "operation must be compare, audit-timestep, certify, review-model, or qualify-workload"
+        )
     if not isinstance(failure.stage, OperationalStage):
         raise TypeError("stage must be an OperationalStage")
     if not isinstance(failure.reason, OperationalReason):

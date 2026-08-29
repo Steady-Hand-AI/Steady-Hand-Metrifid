@@ -94,10 +94,13 @@ class PairedOutputDirectory:
         cls, path: Path, names: PairedOutputNames, descriptor: int
     ) -> PairedOutputDirectory:
         """Own one supplied directory descriptor without resolving its public path."""
-        metadata = os.fstat(descriptor)
-        if not stat.S_ISDIR(metadata.st_mode):
+        try:
+            metadata = os.fstat(descriptor)
+            if not stat.S_ISDIR(metadata.st_mode):
+                raise ValueError("paired output descriptor must name a directory")
+        except BaseException:
             os.close(descriptor)
-            raise ValueError("paired output descriptor must name a directory")
+            raise
         handle = _DirectoryHandle(descriptor, device=metadata.st_dev, inode=metadata.st_ino)
         return cls._from_handle(path, names, handle)
 
@@ -141,6 +144,25 @@ def prepare_paired_output_directory(path: Path, names: PairedOutputNames) -> Pai
     try:
         _require_empty_directory(output)
         verify_paired_output_path_unchanged(output)
+        return output
+    except BaseException:
+        output.close()
+        raise
+
+
+def _adopt_paired_output_descriptor(
+    path: Path, names: PairedOutputNames, descriptor: int
+) -> PairedOutputDirectory:
+    """Adopt one already-retained empty directory descriptor as a paired output.
+
+    The caller has already bound the object it wants written into. Taking that descriptor, rather
+    than re-traversing its pathname, is what keeps the publication inside that exact object: there
+    is no second lookup for another process to redirect. The supplied descriptor is owned from here
+    on and is closed with the returned output.
+    """
+    output = PairedOutputDirectory._from_descriptor(path, names, descriptor)
+    try:
+        _require_empty_directory(output)
         return output
     except BaseException:
         output.close()

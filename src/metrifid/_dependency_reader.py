@@ -1,9 +1,9 @@
 """MuJoCo-reported dependency discovery and snapshot containment.
 
-MuJoCo 3.10.0 resolves contained ``mesh``, ``hfield`` and ``texture`` assets through the effective
-compiler asset directories, but ``mju_getXMLDependencies`` reports some of those assets resolved
-against the main MJCF directory instead. A reported path can therefore name a file the compiler
-never opens. This module keeps ``mju_getXMLDependencies`` as the dependency inventory and, when a
+The admitted MuJoCo compiler resolves contained ``mesh``, ``hfield`` and ``texture`` assets through
+the effective compiler asset directories, but ``mju_getXMLDependencies`` reports some of those
+assets resolved against the main MJCF directory instead. A reported path can therefore name a file
+the compiler never opens. This module keeps ``mju_getXMLDependencies`` as the dependency inventory and, when a
 reported asset does not bind to a contained measured member, re-derives the path the compiler
 actually uses from the declared asset element and the effective compiler directories.
 
@@ -293,9 +293,9 @@ def first_complete_root_element(data: bytes) -> ElementTree.Element | None:
 
     Official MJCF documents are not always well-formed XML documents. The pinned Unitree G1 scene
     carries a duplicated closing tag that MuJoCo tolerates, so only the first complete top-level
-    element is read here and MuJoCo 3.10.0 remains the final syntax authority. This is deliberately
-    not a general recovering parser: the bytes up to the first complete element must still parse,
-    and a document that never closes a top-level element yields None.
+    element is read here and the admitted MuJoCo compiler remains the final syntax authority. This
+    is deliberately not a general recovering parser: the bytes up to the first complete element
+    must still parse, and a document that never closes a top-level element yields None.
     """
     parser = ElementTree.XMLPullParser(("start", "end"))
     depth = 0

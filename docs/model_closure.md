@@ -10,7 +10,8 @@ under that declared root. Every admitted regular file contributes its relative p
 and content hash even when the entrypoint never references it.
 
 Dependency discovery is separate evidence. It asks MuJoCo which includes, meshes, height fields,
-textures, and other assets compilation actually reaches, using MuJoCo 3.10.0 path semantics. An
+textures, and other assets compilation actually reaches, using the exact admitted MuJoCo runtime's
+path semantics. An
 unused regular file changes the source-closure identity, but it does not change compiled-MJB bytes
 unless MuJoCo resolves it.
 
@@ -32,8 +33,8 @@ Be precise about what is and is not guaranteed:
   alpha local release.
 - This package is for local trusted-input workflows, not a hosted untrusted-upload service.
 
-Adding count and depth budgets is a prerequisite for any future hosted tier that accepts untrusted
-uploads. It is deliberately not claimed here.
+Those bounds are the whole guarantee: this local release adds no separate file-count,
+directory-count or traversal-depth budget, and it accepts no untrusted hosted upload.
 
 ## What is refused
 

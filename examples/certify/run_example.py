@@ -33,8 +33,7 @@ def executable() -> str:
     if found is None:
         raise SystemExit(
             "metrifid is not on PATH. Install the package first. From the repository root:\n"
-            "    python -m pip install .\n"
-            "After PyPI publication, you may instead use: python -m pip install metrifid"
+            "    python -m pip install ."
         )
     return found
 
