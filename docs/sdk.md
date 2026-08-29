@@ -1,7 +1,9 @@
 # Python SDK
 
-Metrifid has five execution entry points. They are the supported programmatic surface, and each
-does exactly what its CLI command does — the CLI is a thin wrapper over them.
+Metrifid has seven execution entry points, representing six decision types: the two Runtime Review
+routes reach the same migration-envelope decision through the same referee. They are the supported
+programmatic surface, and each does exactly what its CLI command does — the CLI is a thin wrapper
+over them.
 
 ```python
 from metrifid.certify import certify_models, CertifyResult
@@ -9,14 +11,21 @@ from metrifid.compare import compare_configuration_file, ComparisonRunResult
 from metrifid.model_release import review_model_release, ModelReleaseResult
 from metrifid.workload_qualification import qualify_configuration_file, QualificationResult
 from metrifid.timestep_audit import audit_configuration_file, AuditRunResult
+from metrifid.runtime_review import (
+    review_runtime_configuration_file,
+    run_runtime_review_configuration_file,
+    RuntimeReviewResult,
+    RuntimeReviewRunResult,
+)
 ```
 
-Runnable examples for `certify`, `compare`, `audit-timestep`, and `qualify-workload` live in
-`examples/sdk/`. The Model Change Gate example lives in `examples/model_release/run_example.py`.
+Runnable examples for `certify`, `compare`, `audit-timestep`, `qualify-workload`, and the Runtime
+Review execution journey live in `examples/sdk/`. The Model Change Gate example lives in
+`examples/model_release/run_example.py`.
 
 ## Two kinds of outcome
 
-Read this once; it applies to all five operations.
+Read this once; it applies to all seven operations.
 
 A **completed decision** is a return value. `NOT_CERTIFIED_COMPILED_DIFFERS` is a completed
 decision, not a failure: Metrifid looked, and the artifacts differ. Your code inspects the result.
@@ -29,12 +38,18 @@ or raised exception as authoritative; the presence of an output filename alone n
 operation completed. Catch `metrifid.certify.CertifyOperationError` or
 `metrifid.compare.ComparisonOperationError` (and `AuditAbort` for audits) when you want to translate
 a refusal into application-specific error handling. The carried failure object contains the typed
-reason code.
+reason code. Both Runtime Review routes raise
+`metrifid.runtime_review.RuntimeReviewOperationError` for any bounded failure; it is the same typed
+error the comparison surface raises and exposes the failure as `.failure`. Read
+`.failure.exit_code`: it is `64` for an operational refusal and `70` for a bounded internal-project
+failure. The CLI serializes that strict failure to stderr and exits with the same code. An
+*unexpected* exception may propagate from an SDK call instead; the CLI's defensive boundary converts
+that to a strict exit-`70` failure.
 
 ## Native runtime requirement
 
-All five operations compile a real model, and `compare`, `audit-timestep` and `qualify-workload`
-also step one, so they require the exact supported runtime:
+The five model operations compile a real model, and `compare`, `audit-timestep` and
+`qualify-workload` also step one, so they require the exact supported runtime:
 
 ```text
 Python language   >= 3.11, with no upper bound and no interpreter-name allowlist
@@ -72,10 +87,28 @@ call them reentrantly from inside a Metrifid callback.
 
 ## Output ownership
 
-Each operation publishes into a directory you name. That directory must be absent or empty.
-Metrifid never overwrites an existing entry, and it verifies the published path again after writing,
-so replacing the directory mid-run causes a refusal rather than a result pointing at someone else's
-bytes.
+Each operation publishes into a directory you name, and none of them overwrites an existing entry.
+Every route verifies the published path again after writing, so replacing the directory mid-run
+causes a refusal rather than a result pointing at someone else's bytes.
+
+What the declared root may already be differs by operation, so do not assume one rule:
+
+- `certify_models`, `review_model_release`, `compare_configuration_file` and
+  `audit_configuration_file` accept an absent directory or one existing empty real directory.
+- `qualify_configuration_file` requires the root **not to exist**, and publishes its pair into a
+  fixed `receipt/` subdirectory of the owned root.
+- `review_runtime_configuration_file` requires the root **not to exist**, re-enforces that at
+  creation, builds independent copies beneath a private `.runtime_review.staging` directory, and
+  exposes the completed nested `runtime_review/` decision tree by an atomic no-replace directory
+  rename.
+- `run_runtime_review_configuration_file` requires the run root **not to exist**, then creates and
+  fills it incrementally with the admitted input, preflight and attempt output, identities and the
+  generated configuration. It invokes the nested `review_runtime_configuration_file` publisher and
+  publishes the completed `runtime_review_run.json` last through staged no-clobber link publication.
+
+Runtime Review preserves unpublished staging and partial diagnostic output on failure rather than
+cleaning it up. Such material is evidence for inspection and is never a completed decision, so a
+filename alone never establishes that a route succeeded.
 
 ---
 
@@ -185,9 +218,9 @@ workload_kind   workload_label  output_dir
 **Returns** `AuditRunResult` with `aggregate` (the canonical mapping holding every candidate
 classification and the recommendation), `audit_json`, and `audit_markdown`.
 
-Each candidate is classified `WITHIN_DECLARED_TOLERANCE`, `OUTSIDE_DECLARED_TOLERANCE`, or
-`REFUSED`. The recommendation follows the completed-prefix policy: it never crosses a candidate
-that produced no trustworthy comparison evidence, and it reports
+Each candidate is classified `WITHIN_DECLARED_TOLERANCE`, `OUTSIDE_DECLARED_TOLERANCE`,
+`INCONCLUSIVE`, or `REFUSED`. The recommendation follows the completed-prefix policy: it never
+crosses a candidate that produced no trustworthy comparison evidence, and it reports
 `blocked_by_prior_non_within` when it stopped early.
 
 **Outputs.** `timestep_audit.json`, `timestep_audit.md`, and one `candidates/<token>/` directory per
@@ -359,3 +392,80 @@ and to the campaign identity.
 A mismatch raises even when `receipt_sha256` was recomputed. That hash detects accidental corruption
 of the canonical receipt content; it is not a signature, it authenticates nobody, and resealing a
 contradictory receipt does not make it valid.
+
+## `run_runtime_review_configuration_file`
+
+```python
+from metrifid.runtime_review import (
+    RuntimeReviewRunResult,
+    run_runtime_review_configuration_file,
+)
+
+result: RuntimeReviewRunResult = run_runtime_review_configuration_file("runtime_review_run.json")
+```
+
+Creates the fixed twelve-cell three-grid/two-repeat native evidence set through two already-prepared
+external CPython profiles, then returns the same migration-envelope decision `review-runtime`
+returns.
+
+**Input.** One strict `metrifid.runtime_review_run_config` version 1 document naming
+`baseline_python`, `candidate_python`, a self-contained subject/workload `manifest`, a `fixture_id`,
+and `output_dir`.
+
+**Runtime.** This route does not decide from the installed process's model-compilation gate. It
+measures both declared profiles through its own fixed preflight collector before invoking the
+packaged frozen worker in either, and each profile must pass a same-profile complete-integration-state
+sentinel before any cross-profile cell starts. It never discovers, creates, installs, upgrades, or
+repairs an environment.
+
+**Returns** `RuntimeReviewRunResult` with `status`, `reason_code`, `receipt`, `receipt_sha256`,
+`runtime_review_json`, `runtime_review_markdown`, `runtime_review_run_json`, `run_sha256`,
+`captured_evidence_root`, and `generated_runtime_review_config`.
+
+**Outputs.** A complete evidence tree under the declared root, which must not exist. It holds the
+canonical receipt and its Markdown rendering, the self-hashed run record, one identity document per
+measured profile, the generated review configuration, and one retained directory per worker process.
+
+## `review_runtime_configuration_file`
+
+```python
+from metrifid.runtime_review import RuntimeReviewResult, review_runtime_configuration_file
+
+result: RuntimeReviewResult = review_runtime_configuration_file("runtime_review.json")
+```
+
+Decides from a twelve-cell evidence set that already exists. It runs no MuJoCo worker and selects no
+method; both routes finish through the same referee.
+
+**Input.** One strict `metrifid.runtime_review_config` document. Version 1 is the immutable
+historical route; a new run generates version 2, which binds each semantic role to an exact measured
+native-profile identity.
+
+**Returns** `RuntimeReviewResult` with `status`, `reason_code`, `receipt`, `receipt_sha256`,
+`runtime_review_json`, and `runtime_review_markdown`, plus a read-only `exit_code` property.
+
+**Status and exit.** Both routes share one registry:
+
+```text
+WITHIN_DECLARED_MIGRATION_ENVELOPE     exit 0
+INSUFFICIENT_EVIDENCE                  exit 20
+UNRESOLVED_NEAR_BOUNDARY               exit 30
+OUTSIDE_DECLARED_MIGRATION_ENVELOPE    exit 40
+```
+
+`runtime_review_exit_code(status)` maps one to the other, and those four are the completed
+decisions only. Any bounded failure raises `RuntimeReviewOperationError` instead of returning one of
+them, carrying `.failure.exit_code` of `64` for an operational refusal or `70` for a bounded
+internal-project failure; the CLI serializes the failure and exits with that same code. An
+unexpected exception may propagate from the SDK call, and the CLI converts it to a strict exit-`70`
+failure.
+
+## `load_and_validate_runtime_review_receipt`
+
+Revalidates a published receipt against its owned evidence snapshot, and works after the original
+input tree has been removed. Receipt validation admits schema versions 1 and 2; only a version-2
+receipt carries and validates the `profiles` member.
+
+See [`runtime_review.md`](runtime_review.md) for the method, the evidence contract, the selected
+conditional tail envelope, and the complete claim boundary. A runnable script is
+[`examples/sdk/runtime_review_run_api.py`](../examples/sdk/runtime_review_run_api.py).

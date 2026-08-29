@@ -688,7 +688,7 @@ Start at the repository root.
 | --- | --- |
 | [`README.md`](../README.md) | understand the product, install it, and see the main commands |
 | [`examples/certify/README.md`](../examples/certify/README.md) | run the fastest first example |
-| [`docs/sdk.md`](sdk.md) | the supported programmatic execution surface for all five operations |
+| [`docs/sdk.md`](sdk.md) | the supported programmatic execution surface for all seven operations |
 | [`docs/reference.md`](reference.md) | look up commands, exits, statuses, schemas, support, and Python API |
 | [`docs/compiled_certification.md`](compiled_certification.md) | understand the exact `certify` contract |
 | [`docs/model_closure.md`](model_closure.md) | understand source identity, roots, dependencies, snapshots, and confinement |

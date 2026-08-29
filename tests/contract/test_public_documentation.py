@@ -15,6 +15,7 @@ network.
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -439,3 +440,282 @@ def _anchor_exists(path: Path, anchor: str) -> bool:
         if slug == wanted:
             return True
     return False
+
+
+# ---- The reference and SDK documents must cover the whole public surface ----------------------------
+#
+# Metrifid 0.7.0 includes both Runtime Review routes, while the reference and SDK documents described a
+# five-command product. Each helper below returns concrete problems for one semantic property, and the
+# same helper is applied to the real document and to a mutated copy, so a control proves the assertion
+# reacts rather than proving that string replacement works.
+
+_RUNTIME_REVIEW_FUNCTIONS = (
+    "review_runtime_configuration_file",
+    "run_runtime_review_configuration_file",
+)
+# Each completed decision, bound to the exit its own table row must carry.
+_RUNTIME_REVIEW_DECISIONS = (
+    ("WITHIN_DECLARED_MIGRATION_ENVELOPE", "0"),
+    ("INSUFFICIENT_EVIDENCE", "20"),
+    ("UNRESOLVED_NEAR_BOUNDARY", "30"),
+    ("OUTSIDE_DECLARED_MIGRATION_ENVELOPE", "40"),
+)
+_TIMESTEP_CLASSIFICATIONS = (
+    "WITHIN_DECLARED_TOLERANCE",
+    "OUTSIDE_DECLARED_TOLERANCE",
+    "INCONCLUSIVE",
+    "REFUSED",
+)
+# Every Runtime Review schema, with the versions its row must name.
+_RUNTIME_REVIEW_SCHEMAS = (
+    ("metrifid.runtime_review_receipt", ("1", "2")),
+    ("metrifid.runtime_review_config", ("1", "2")),
+    ("metrifid.runtime_review_run_config", ("1",)),
+    ("metrifid.runtime_review_run", ("1", "2")),
+    ("metrifid.runtime_review.native_profile_identity", ("1", "2")),
+    ("metrifid.runtime_review.integration_state_sentinel", ("1",)),
+    ("metrifid.runtime_review_process_command", ("1",)),
+)
+_STALE_SURFACE_COUNTS = ("all five operations", "five execution entry points")
+_TABLE_ROW = re.compile(r"(?m)^\|.*\|\s*$")
+
+
+def _fenced_block_after(text: str, heading: str) -> str:
+    """Return the first fenced block that follows `heading`, or an empty string."""
+    start = text.find(heading)
+    if start < 0:
+        return ""
+    fence = re.search(r"(?ms)^(?P<fence>```|~~~).*?\n(?P<body>.*?)^(?P=fence)", text[start:])
+    return fence.group("body") if fence else ""
+
+
+def _section_after(text: str, heading: str) -> str:
+    """Return the text from `heading` up to the next heading of the same or higher level."""
+    start = text.find(heading)
+    if start < 0:
+        return ""
+    level = len(heading) - len(heading.lstrip("#"))
+    following = re.search(rf"(?m)^#{{1,{level}}} ", text[start + len(heading) :])
+    return (
+        text[start:]
+        if following is None
+        else text[start : start + len(heading) + following.start()]
+    )
+
+
+def command_surface_problems(text: str) -> list[str]:
+    """Every accepted command must appear in the Commands block itself, not merely somewhere later."""
+    block = _fenced_block_after(text, "## Commands")
+    if not block:
+        return ["the Commands section has no fenced command block"]
+    return [
+        f"the Commands block does not show `metrifid {command}`"
+        for command in _ACCEPTED_COMMANDS
+        if f"metrifid {command}" not in block
+    ]
+
+
+def runtime_review_decision_problems(text: str) -> list[str]:
+    """Each completed decision must be bound to its own exit inside one table row."""
+    rows = _TABLE_ROW.findall(text)
+    problems: list[str] = []
+    for status, exit_code in _RUNTIME_REVIEW_DECISIONS:
+        carrying = [row for row in rows if status in row]
+        if not carrying:
+            problems.append(f"no table row documents the {status} decision")
+        elif not any(f"| `{exit_code}` |" in row for row in carrying):
+            problems.append(f"the {status} row does not bind exit `{exit_code}`")
+    return problems
+
+
+def timestep_classification_problems(text: str) -> list[str]:
+    """The emitted classification strings belong in the Statuses section."""
+    section = _section_after(text, "## Statuses")
+    if not section:
+        return ["the reference has no Statuses section"]
+    return [
+        f"the Statuses section omits the {classification} timestep classification"
+        for classification in _TIMESTEP_CLASSIFICATIONS
+        if classification not in section
+    ]
+
+
+def schema_row_problems(text: str) -> list[str]:
+    """Each Runtime Review schema needs a row naming it and every version it publishes."""
+    rows = _TABLE_ROW.findall(text)
+    problems: list[str] = []
+    for identifier, versions in _RUNTIME_REVIEW_SCHEMAS:
+        carrying = [row for row in rows if f"`{identifier}`" in row]
+        if not carrying:
+            problems.append(f"no schema row names {identifier}")
+            continue
+        row = carrying[0]
+        problems.extend(
+            f"the {identifier} row does not name version `{version}`"
+            for version in versions
+            if f"`{version}`" not in row
+        )
+    return problems
+
+
+def runtime_review_api_problems(text: str, headings: tuple[str, ...]) -> list[str]:
+    """Both execution functions must appear across the sections documenting the Runtime Review API.
+
+    The reference documents both under one module heading; the SDK gives each its own section, so the
+    requirement is over the union of the named sections rather than over each one.
+    """
+    problems: list[str] = []
+    sections: list[str] = []
+    for heading in headings:
+        section = _section_after(text, heading)
+        if not section:
+            problems.append(f"the document has no {heading!r} section")
+        else:
+            sections.append(section)
+    combined = "\n".join(sections)
+    problems.extend(
+        f"the Runtime Review API sections do not document {function}"
+        for function in _RUNTIME_REVIEW_FUNCTIONS
+        if function not in combined
+    )
+    return problems
+
+
+def stale_surface_count_problems(text: str) -> list[str]:
+    """Active prose must not describe the execution surface as five operations."""
+    flat = _flattened(text).lower()
+    return [
+        f"the document still describes the surface as {stale!r}"
+        for stale in _STALE_SURFACE_COUNTS
+        if stale in flat
+    ]
+
+
+def _reference() -> str:
+    return _document("docs/reference.md").read_text(encoding="utf-8")
+
+
+def _sdk() -> str:
+    return _document("docs/sdk.md").read_text(encoding="utf-8")
+
+
+def test_the_reference_command_block_lists_every_accepted_command() -> None:
+    """The Commands block is the command surface."""
+    assert command_surface_problems(_reference()) == []
+
+
+def test_the_reference_binds_every_runtime_review_decision_to_its_exit() -> None:
+    """A swapped status/exit pairing must not pass."""
+    assert runtime_review_decision_problems(_reference()) == []
+
+
+def test_the_reference_states_the_exact_timestep_classifications() -> None:
+    """The emitted values are the long forms, not the constant names."""
+    assert timestep_classification_problems(_reference()) == []
+
+
+def test_the_reference_documents_every_runtime_review_schema_version() -> None:
+    """A published document is only discoverable if its schema and versions are listed."""
+    assert schema_row_problems(_reference()) == []
+
+
+_REFERENCE_API_HEADINGS = ("### `metrifid.runtime_review`",)
+_SDK_API_HEADINGS = (
+    "## `run_runtime_review_configuration_file`",
+    "## `review_runtime_configuration_file`",
+)
+
+
+def test_both_documents_expose_the_runtime_review_api() -> None:
+    """Both execution functions are public, so both belong in the documented API surface."""
+    assert runtime_review_api_problems(_reference(), _REFERENCE_API_HEADINGS) == []
+    assert runtime_review_api_problems(_sdk(), _SDK_API_HEADINGS) == []
+
+
+@pytest.mark.parametrize(
+    "name", ["README.md", "docs/getting_started.md", "docs/sdk.md", "docs/reference.md"]
+)
+def test_no_active_document_counts_the_execution_surface_at_five(name: str) -> None:
+    """Metrifid 0.7.0 includes two Runtime Review routes; a document counting five is stale."""
+    assert stale_surface_count_problems(_document(name).read_text(encoding="utf-8")) == []
+
+
+@pytest.mark.parametrize(
+    ("mutate", "helper", "expected"),
+    [
+        pytest.param(
+            lambda text: text.replace(
+                "metrifid run-runtime-review runtime_review_run.json\n", "", 1
+            ),
+            command_surface_problems,
+            "does not show `metrifid run-runtime-review`",
+            id="command_removed_from_the_commands_block",
+        ),
+        pytest.param(
+            lambda text: text.replace(
+                "| `20` | `review-runtime`, `run-runtime-review` | `INSUFFICIENT_EVIDENCE`",
+                "| `30` | `review-runtime`, `run-runtime-review` | `INSUFFICIENT_EVIDENCE`",
+                1,
+            ),
+            runtime_review_decision_problems,
+            "INSUFFICIENT_EVIDENCE row does not bind exit `20`",
+            id="decision_bound_to_the_wrong_exit",
+        ),
+        pytest.param(
+            lambda text: text.replace("WITHIN_DECLARED_TOLERANCE", "WITHIN", 1),
+            timestep_classification_problems,
+            "omits the WITHIN_DECLARED_TOLERANCE",
+            id="timestep_classification_reduced_to_the_constant_name",
+        ),
+        pytest.param(
+            lambda text: text.replace(
+                "| `metrifid.runtime_review_run`, versions `1` and `2` |",
+                "| `metrifid.runtime_review_run`, version `1` |",
+                1,
+            ),
+            schema_row_problems,
+            "runtime_review_run row does not name version `2`",
+            id="schema_row_loses_a_version",
+        ),
+        pytest.param(
+            lambda text: text.replace(
+                "| `metrifid.runtime_review_process_command`, version `1` | `command.json` in each retained process directory |\n",
+                "",
+                1,
+            ),
+            schema_row_problems,
+            "no schema row names metrifid.runtime_review_process_command",
+            id="schema_row_removed",
+        ),
+    ],
+)
+def test_the_reference_assertions_react_to_a_real_change(
+    mutate: Callable[[str], str], helper: Callable[[str], list[str]], expected: str
+) -> None:
+    """Alter one real row or block, then run the same helper the real document passes."""
+    text = _reference()
+    assert helper(text) == [], "the real reference must satisfy the helper first"
+    mutated = mutate(text)
+    assert mutated != text, "the mutation must actually change the document"
+    problems = helper(mutated)
+    assert any(expected in problem for problem in problems), problems
+
+
+def test_the_api_assertion_reacts_to_a_removed_section() -> None:
+    """Dropping one execution function's SDK section must be detected."""
+    text = _sdk()
+    assert runtime_review_api_problems(text, _SDK_API_HEADINGS) == []
+    heading = "## `review_runtime_configuration_file`"
+    section = _section_after(text, heading)
+    assert section, "the section must exist before it is removed"
+    mutated = text.replace(section, "", 1)
+    assert mutated != text
+    problems = runtime_review_api_problems(mutated, _SDK_API_HEADINGS)
+    assert any("has no" in problem for problem in problems), problems
+
+
+def test_the_stale_surface_assertion_reacts_to_reverted_prose() -> None:
+    """Reintroducing the five-operation wording must be detected."""
+    text = _sdk()
+    assert stale_surface_count_problems(text) == []
+    assert stale_surface_count_problems(text + "\nIt applies to all five operations.\n") != []
