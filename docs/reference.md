@@ -16,11 +16,16 @@ metrifid review-model BASELINE_MJCF CANDIDATE_MJCF --policy POLICY_JSON \
   [--baseline-root BASELINE_ROOT] [--candidate-root CANDIDATE_ROOT]
 
 metrifid audit-timestep timestep_audit.json
+
+metrifid review-runtime runtime_review.json
+metrifid run-runtime-review runtime_review_run.json
 ```
 
 ## Runtime support
 
-All five native commands share one admission policy: Python 3.11 or newer with no upper bound,
+The five model commands — `certify`, `review-model`, `compare`, `audit-timestep` and
+`qualify-workload` — compile a model in the installed process and share one admission policy:
+Python 3.11 or newer with no upper bound,
 Linux or macOS with the required POSIX capabilities, no architecture allowlist, a stable MuJoCo
 package at or above 3.9 whose native string and integer encode the same three-part base version,
 and NumPy 1.26 or newer with no upper bound. Exact stable profiles `3.9.0` through `3.12.0` are
@@ -33,6 +38,14 @@ Runtime admission and claim coverage are separate. Missing call-graph capabiliti
 action contract refuses with `MUJOCO_FEATURE_COVERAGE_INCOMPLETE`; `review-model` never reuses an
 older typed public-field projection for an uncharacterized surface. Both are operational exit 64,
 with detected identity, the affected claim, its risk, and a concrete remediation in evidence.
+
+The two Runtime Review routes do not take that installed-process gate as their subject.
+`review-runtime` evaluates a retained twelve-cell evidence set: it starts no MuJoCo worker and
+decides from evidence produced elsewhere. `run-runtime-review` measures two already-prepared
+external CPython profiles through its own fixed preflight collector before invoking the packaged
+frozen worker in each, and never substitutes the installed process's admission for those
+profile-specific measurements. Neither route discovers, installs, selects, upgrades or repairs an
+environment.
 
 Pure workload writers and canonical JSON, exact-number, and receipt-validation helpers do not invoke
 the native runtime gate.
@@ -56,11 +69,16 @@ the native runtime gate.
 | `40` | `review-model` | `REVIEW_REQUIRED` — an observed change is undeclared |
 | `40` | `review-model` | `OUTSIDE_DECLARED_POLICY` — forbidden change or missing requirement |
 | `0` | `audit-timestep` | the audit completed and published its recommendation |
+| `0` | `review-runtime`, `run-runtime-review` | `WITHIN_DECLARED_MIGRATION_ENVELOPE` — every witness is within tolerance across the complete horizon |
+| `20` | `review-runtime`, `run-runtime-review` | `INSUFFICIENT_EVIDENCE` — repeatability, solver, contact-topology, asymptotic or full-prefix evidence is insufficient |
+| `30` | `review-runtime`, `run-runtime-review` | `UNRESOLVED_NEAR_BOUNDARY` — complete evidence remains too close to a declared boundary to decide |
+| `40` | `review-runtime`, `run-runtime-review` | `OUTSIDE_DECLARED_MIGRATION_ENVELOPE` — a decisive witness places the candidate outside the declared migration envelope |
 | `64` | any | invalid invocation, input or output |
 | `70` | any | internal failure |
 
-Exit `64` and `70` are refusals: no decision was reached. Every refusal writes one strict
-operational-failure JSON document to stderr naming its stage and reason code.
+Exit `64` is an operational refusal and exit `70` is an internal failure. Both mean no completed
+decision was reached, and for either the CLI writes one strict `metrifid.operational_failure` JSON
+document to stderr naming its stage and reason code.
 
 ## Statuses
 
@@ -83,15 +101,37 @@ review-model      NO_COMPILED_CHANGE
                   REVIEW_REQUIRED
                   OUTSIDE_DECLARED_POLICY
 
-audit-timestep    per candidate: WITHIN, OUTSIDE, INCONCLUSIVE, REFUSED
+audit-timestep    per candidate: WITHIN_DECLARED_TOLERANCE
+                                OUTSIDE_DECLARED_TOLERANCE
+                                INCONCLUSIVE
+                                REFUSED
+
+review-runtime    WITHIN_DECLARED_MIGRATION_ENVELOPE
+run-runtime-review
+                  INSUFFICIENT_EVIDENCE
+                  UNRESOLVED_NEAR_BOUNDARY
+                  OUTSIDE_DECLARED_MIGRATION_ENVELOPE
 ```
 
 `certify` statuses are its own. They are never mixed into the comparison status registry, and
 `certify` never emits a comparison status or exit.
 
+Both Runtime Review routes finish through the same referee, so they share one status registry and
+one exit mapping. See [`runtime_review.md`](runtime_review.md) for what each status decides.
+
 ## Schemas
 
-Every published document is canonical JSON with a self-hash over its own content.
+Decision-bearing JSON is canonical and carries a self-hash over its own content: the certification,
+comparison, model-release, workload-qualification and Runtime Review receipts, the timestep-audit
+aggregate, the Runtime Review run record, and published native-profile identity documents each
+recompute their own digest on validation.
+
+Not every published member is a self-hashed JSON document. A published Markdown rendering derives
+its integrity from re-rendering byte-exactly from its canonical receipt rather than from a self-hash
+of its own. Retained Runtime Review process members — the canonical `command.json`, the raw
+`stdout.txt` and `stderr.txt` streams, and the plain `exit_code.txt` — carry no self-hash field, and
+an admitted input configuration is bound by digests recorded in the receipt rather than by a digest
+of its own.
 
 | Schema identifier | Published as |
 | --- | --- |
@@ -103,9 +143,49 @@ Every published document is canonical JSON with a self-hash over its own content
 | `metrifid.workload_qualification_receipt`, version `1` | the receipt `qualify-workload` publishes |
 | `metrifid.workload_qualification_config`, version `1` | the `qualification.json` you supply |
 | `metrifid.timestep_audit`, version `1` | `timestep_audit.json` |
-| `metrifid.operational_failure`, version `1` | stderr on any refusal |
+| `metrifid.operational_failure`, version `1` | stderr on an operational refusal or an internal failure |
+| `metrifid.runtime_review_receipt`, versions `1` and `2` | `runtime_review.json` |
+| `metrifid.runtime_review_config`, versions `1` and `2` | the `runtime_review.json` configuration you supply to `review-runtime` |
+| `metrifid.runtime_review_run_config`, version `1` | the `runtime_review_run.json` you supply to `run-runtime-review` |
+| `metrifid.runtime_review_run`, versions `1` and `2` | the run record `run-runtime-review` publishes |
+| `metrifid.runtime_review.native_profile_identity`, versions `1` and `2` | one published identity document per measured profile |
+| `metrifid.runtime_review.integration_state_sentinel`, version `1` | inside a schema-version-2 profile identity |
+| `metrifid.runtime_review_process_command`, version `1` | `command.json` in each retained process directory |
 
-`certify` and `compare` each publish one JSON/Markdown pair into an absent or empty directory. `audit-timestep` publishes its aggregate JSON/Markdown pair plus a `candidates/` evidence tree containing one retained result or operational failure per candidate. A nonempty output directory refuses. Every public file name is acquired with a descriptor-relative no-clobber hard link and exact sealed-byte verification. Failure cleanup removes private temporaries but never unlinks a public final, so a later failure may leave already-linked diagnostic evidence while still refusing the operation. A success exit, the complete command-specific output tree, and the final public-path and byte verification are all required before treating a result as published.
+Runtime Review keeps schema version `1` as the immutable historical route and validates it, while a
+new run emits version `2`: `run-runtime-review` generates its downstream review configuration at
+config version `2` and refuses to generate anything else, and publishes its run record at run-record
+version `2`. Receipt validation admits versions `1` and `2`; only a version-2 receipt carries and
+validates the `profiles` member, and a version-1 published tree contains no profile-identity members
+at all.
+
+Output-root semantics differ by command, so no single rule covers all seven.
+
+| Command | Declared output root | Publication |
+| --- | --- | --- |
+| `certify`, `review-model`, `compare` | absent, or one existing empty real directory | one JSON/Markdown pair through the require-empty paired publisher |
+| `audit-timestep` | absent, or one existing empty real directory | the aggregate pair plus a `candidates/` tree holding one retained result or operational failure per candidate; its pair is published without re-requiring emptiness, because its own evidence tree already populates the root |
+| `qualify-workload` | must not exist | the pair is published into a fixed `receipt/` subdirectory of the owned root, through a retained descriptor of that subdirectory |
+| `review-runtime` | must not exist, re-enforced at creation | independent copies are built beneath a private `.runtime_review.staging` directory, and the completed nested `runtime_review/` decision tree is exposed by an atomic no-replace directory rename |
+| `run-runtime-review` | must not exist | the run root is created and filled incrementally with the admitted input, preflight and attempt output, identities and generated configuration; partial diagnostic evidence is deliberately preserved; the nested `review-runtime` publisher is invoked; and the completed `runtime_review_run.json` is published last through staged no-clobber link publication |
+
+Publication mechanisms differ, so not every public file is a link and not every tree appears at once:
+
+- a paired final JSON/Markdown result is published through the paired publisher, which acquires each
+  public name with a descriptor-relative no-clobber link and exact sealed-byte verification;
+- other owned evidence — including qualification members and execution-run members — may instead be
+  created directly, with descriptor-relative exclusive creation beneath the owned root; and
+- the nested Runtime Review decision tree is built as independent copies under a private staging
+  directory and exposed by one atomic no-replace directory rename.
+
+Runtime Review failure handling is deliberately non-destructive: unpublished staging and partial
+diagnostic output are preserved for inspection rather than cleaned up, they are never reported as a
+completed decision, and caller or public final material is never removed. Elsewhere, failure cleanup
+removes private temporaries but never unlinks a public final, so a later failure may leave
+already-published diagnostic evidence while still refusing the operation.
+
+A success exit, the complete command-specific output tree, and that command's own final path and byte
+verification are all required before treating a result as published.
 
 Model traversal and result publication are descriptor-confined: replacing an admitted path cannot redirect reads, writes, publication, or cleanup. Certify and Compare refuse output equal to or below
 either model root. State and actions NPZ admission reads from one no-follow descriptor and enforces
@@ -167,9 +247,43 @@ Numbers that must survive a round trip exactly are never written as JSON floats:
 The supported programmatic **execution** surface is documented in [`docs/sdk.md`](sdk.md):
 `metrifid.certify.certify_models`, `metrifid.model_release.review_model_release`,
 `metrifid.compare.compare_configuration_file`, `metrifid.timestep_audit.audit_configuration_file`,
-and `metrifid.workload_qualification.qualify_configuration_file`. Each of the five CLI commands is a
+`metrifid.workload_qualification.qualify_configuration_file`,
+`metrifid.runtime_review.review_runtime_configuration_file`, and
+`metrifid.runtime_review.run_runtime_review_configuration_file`. Each of the seven CLI commands is a
 thin wrapper over one of those functions. The table below covers the supporting value types and
 helpers.
+
+### `metrifid.runtime_review`
+
+`__all__` is a compatibility commitment and contains exactly these ten names:
+
+| Name | Purpose |
+| --- | --- |
+| `RuntimeReviewStatus` | the four completed statuses |
+| `RuntimeReviewReasonCode` | the reason attached to a completed decision |
+| `RuntimeReviewExitCode` | the completed process exit-code registry, `0`/`20`/`30`/`40` |
+| `RuntimeReviewResult` | what `review_runtime_configuration_file` returns |
+| `RuntimeReviewRunResult` | what `run_runtime_review_configuration_file` returns |
+| `RuntimeReviewOperationError` | the bounded operational refusal |
+| `runtime_review_exit_code` | map one `RuntimeReviewStatus` to its `RuntimeReviewExitCode` |
+| `review_runtime_configuration_file` | decide from a retained twelve-cell evidence set |
+| `run_runtime_review_configuration_file` | create that evidence through two prepared profiles, then decide |
+| `load_and_validate_runtime_review_receipt` | validate a published receipt and its owned evidence |
+
+```python
+def review_runtime_configuration_file(config_path: str | Path) -> RuntimeReviewResult: ...
+def run_runtime_review_configuration_file(config_path: str | Path) -> RuntimeReviewRunResult: ...
+```
+
+`RuntimeReviewResult` is a frozen dataclass carrying `status`, `reason_code`, `receipt`,
+`receipt_sha256`, `runtime_review_json` and `runtime_review_markdown`, plus a read-only `exit_code`
+property derived from `runtime_review_exit_code(status)`. `RuntimeReviewRunResult` carries those six
+and adds `runtime_review_run_json`, `run_sha256`, `captured_evidence_root` and
+`generated_runtime_review_config`.
+
+`RuntimeReviewOperationError` is the same bounded refusal type the comparison surface raises, and
+exposes the operational failure as `.failure`. A completed decision returns a result; a refusal
+raises.
 
 ### `metrifid.workload_qualification`
 

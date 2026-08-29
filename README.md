@@ -9,7 +9,7 @@ reports on the trajectories you happened to run.
 `metrifid certify` compiles both versions and compares every byte MuJoCo emits for the compiled
 model.
 
-Project links: [repository](https://github.com/Steady-Hand-AI/Steady-Hand-Metrifid) · [documentation](docs/getting_started.md) · [issues](https://github.com/Steady-Hand-AI/Steady-Hand-Metrifid/issues) · [changelog](CHANGELOG.md) · [security reporting](https://github.com/Steady-Hand-AI/Steady-Hand-Metrifid/security/advisories/new)
+Project links: [repository](https://github.com/Steady-Hand-AI/Steady-Hand-Metrifid) · [documentation](https://github.com/Steady-Hand-AI/Steady-Hand-Metrifid/blob/main/docs/getting_started.md) · [issues](https://github.com/Steady-Hand-AI/Steady-Hand-Metrifid/issues) · [changelog](https://github.com/Steady-Hand-AI/Steady-Hand-Metrifid/blob/main/CHANGELOG.md) · [security reporting](https://github.com/Steady-Hand-AI/Steady-Hand-Metrifid/security/advisories/new)
 
 ## Start with the change you made
 
@@ -66,8 +66,8 @@ Both routes hand you a receipt that names the next question. Follow the one you 
 Every one of these is a completed decision with a receipt you can revalidate independently. None of
 them establishes physical correctness or safety.
 
-See [`docs/public_cases.md`](docs/public_cases.md) for six complaint-backed cases that walk the whole
-journey end to end, and [`docs/getting_started.md`](docs/getting_started.md) for the guided tour.
+See [`docs/public_cases.md`](https://github.com/Steady-Hand-AI/Steady-Hand-Metrifid/blob/main/docs/public_cases.md) for six complaint-backed cases that walk the whole
+journey end to end, and [`docs/getting_started.md`](https://github.com/Steady-Hand-AI/Steady-Hand-Metrifid/blob/main/docs/getting_started.md) for the guided tour.
 
 ## First use
 
@@ -118,7 +118,7 @@ all 6 checks passed
 ```
 
 Two models written differently that compile identically, and one model with a single changed
-mass. See [`examples/certify/`](examples/certify/).
+mass. See [`examples/certify/`](https://github.com/Steady-Hand-AI/Steady-Hand-Metrifid/tree/main/examples/certify/).
 
 ## Why complete source closure and compiled identity matter
 
@@ -161,8 +161,8 @@ metrifid review-model baseline/model.xml candidate/model.xml \
 This is a static policy decision. It steps no model and **does not establish dynamic equivalence**:
 a statically permitted compiled change may still change behavior, which is what `compare` measures.
 
-See [`docs/model_release.md`](docs/model_release.md) for the complete schema and semantics, and
-[`examples/model_release/README.md`](examples/model_release/README.md) for a runnable two-pass
+See [`docs/model_release.md`](https://github.com/Steady-Hand-AI/Steady-Hand-Metrifid/blob/main/docs/model_release.md) for the complete schema and semantics, and
+[`examples/model_release/README.md`](https://github.com/Steady-Hand-AI/Steady-Hand-Metrifid/blob/main/examples/model_release/README.md) for a runnable two-pass
 example.
 
 ## The remaining decisions
@@ -170,13 +170,13 @@ example.
 - **`metrifid run-runtime-review`** — create the fixed twelve native evidence cells through two
   explicit, already-prepared Python profiles and immediately receive the same full-horizon Runtime
   Review decision. Metrifid measures but does not discover, install, or repair those environments.
-  See the copyable [`examples/runtime_review_run`](examples/runtime_review_run/) journey.
+  See the copyable [`examples/runtime_review_run`](https://github.com/Steady-Hand-AI/Steady-Hand-Metrifid/tree/main/examples/runtime_review_run/) journey.
 
 - **`metrifid review-runtime`** — whether one exact candidate MuJoCo native profile may replace one
   exact baseline profile for a declared source closure and workload over the complete retained
   horizon. It reads twelve already-produced three-grid/two-repeat evidence cells; it does not run a
   worker or select a method. Both paths use the same referee. See
-  [`docs/runtime_review.md`](docs/runtime_review.md).
+  [`docs/runtime_review.md`](https://github.com/Steady-Hand-AI/Steady-Hand-Metrifid/blob/main/docs/runtime_review.md).
 
 - **`metrifid qualify-workload`** — whether three of your declared workloads would actually
   notice a supplied probe model at or above the magnitude you care about, and which probes stay
@@ -190,10 +190,10 @@ example.
 - **`metrifid audit-timestep`** — which of your declared candidate timesteps still produces no
   material difference against the reference, for a declared workload and tolerances? Every
   candidate is attempted independently; the recommendation is the largest one backed by an
-  unbroken within-tolerance prefix. See [`docs/timestep_audit.md`](docs/timestep_audit.md).
+  unbroken within-tolerance prefix. See [`docs/timestep_audit.md`](https://github.com/Steady-Hand-AI/Steady-Hand-Metrifid/blob/main/docs/timestep_audit.md).
 - **`metrifid compare`** — under one declared deterministic open-loop workload, did monitored
   hinge or slide traces move beyond tolerances you set in physical units? See
-  [`docs/comparison.md`](docs/comparison.md).
+  [`docs/comparison.md`](https://github.com/Steady-Hand-AI/Steady-Hand-Metrifid/blob/main/docs/comparison.md).
 
 `compare` is the workload-bounded decision. `certify` is an artifact statement and makes no
 behavioral claim.
@@ -202,21 +202,21 @@ behavioral claim.
 
 | Document | What it covers |
 | --- | --- |
-| [docs/getting_started.md](docs/getting_started.md) | a human-friendly first tour, installation, and documentation map |
-| [docs/capabilities_and_use_cases.md](docs/capabilities_and_use_cases.md) | current capabilities, practical uses, limits, and non-goals |
-| [docs/public_cases.md](docs/public_cases.md) | six complaint-backed public cases and the external Robosuite Jaco study |
-| [docs/reference.md](docs/reference.md) | commands, exits, statuses, schemas, Python API |
-| [`docs/compiled_certification.md`](docs/compiled_certification.md) | the `certify` contract and claim boundary |
-| [`docs/model_closure.md`](docs/model_closure.md) | how the model closure is measured and confined |
-| [`docs/workloads.md`](docs/workloads.md) | state, action and exact time-grid declarations |
-| [`docs/comparison.md`](docs/comparison.md) | the `compare` decision |
-| [`docs/timestep_audit.md`](docs/timestep_audit.md) | the `audit-timestep` decision |
-| [`docs/model_release.md`](docs/model_release.md) | the `review-model` static Model Change Gate |
-| [`docs/workload_qualification.md`](docs/workload_qualification.md) | the `qualify-workload` detection decision |
-| [`docs/runtime_review.md`](docs/runtime_review.md) | the `run-runtime-review` execution journey and `review-runtime` retained-evidence decision |
-| [docs/sdk.md](docs/sdk.md) | the supported programmatic execution surfaces, including `review_runtime_configuration_file` |
-| [`docs/canonicalization.md`](docs/canonicalization.md) | canonical JSON, exact numbers, self-hashing |
-| [`docs/menagerie_formatter_case.md`](docs/menagerie_formatter_case.md) | a real public case study |
+| [docs/getting_started.md](https://github.com/Steady-Hand-AI/Steady-Hand-Metrifid/blob/main/docs/getting_started.md) | a human-friendly first tour, installation, and documentation map |
+| [docs/capabilities_and_use_cases.md](https://github.com/Steady-Hand-AI/Steady-Hand-Metrifid/blob/main/docs/capabilities_and_use_cases.md) | current capabilities, practical uses, limits, and non-goals |
+| [docs/public_cases.md](https://github.com/Steady-Hand-AI/Steady-Hand-Metrifid/blob/main/docs/public_cases.md) | six complaint-backed public cases and the external Robosuite Jaco study |
+| [docs/reference.md](https://github.com/Steady-Hand-AI/Steady-Hand-Metrifid/blob/main/docs/reference.md) | commands, exits, statuses, schemas, Python API |
+| [`docs/compiled_certification.md`](https://github.com/Steady-Hand-AI/Steady-Hand-Metrifid/blob/main/docs/compiled_certification.md) | the `certify` contract and claim boundary |
+| [`docs/model_closure.md`](https://github.com/Steady-Hand-AI/Steady-Hand-Metrifid/blob/main/docs/model_closure.md) | how the model closure is measured and confined |
+| [`docs/workloads.md`](https://github.com/Steady-Hand-AI/Steady-Hand-Metrifid/blob/main/docs/workloads.md) | state, action and exact time-grid declarations |
+| [`docs/comparison.md`](https://github.com/Steady-Hand-AI/Steady-Hand-Metrifid/blob/main/docs/comparison.md) | the `compare` decision |
+| [`docs/timestep_audit.md`](https://github.com/Steady-Hand-AI/Steady-Hand-Metrifid/blob/main/docs/timestep_audit.md) | the `audit-timestep` decision |
+| [`docs/model_release.md`](https://github.com/Steady-Hand-AI/Steady-Hand-Metrifid/blob/main/docs/model_release.md) | the `review-model` static Model Change Gate |
+| [`docs/workload_qualification.md`](https://github.com/Steady-Hand-AI/Steady-Hand-Metrifid/blob/main/docs/workload_qualification.md) | the `qualify-workload` detection decision |
+| [`docs/runtime_review.md`](https://github.com/Steady-Hand-AI/Steady-Hand-Metrifid/blob/main/docs/runtime_review.md) | the `run-runtime-review` execution journey and `review-runtime` retained-evidence decision |
+| [docs/sdk.md](https://github.com/Steady-Hand-AI/Steady-Hand-Metrifid/blob/main/docs/sdk.md) | the supported programmatic execution surfaces, including `review_runtime_configuration_file` |
+| [`docs/canonicalization.md`](https://github.com/Steady-Hand-AI/Steady-Hand-Metrifid/blob/main/docs/canonicalization.md) | canonical JSON, exact numbers, self-hashing |
+| [`docs/menagerie_formatter_case.md`](https://github.com/Steady-Hand-AI/Steady-Hand-Metrifid/blob/main/docs/menagerie_formatter_case.md) | a real public case study |
 
 ## Requirements
 
@@ -286,11 +286,11 @@ from metrifid.runtime_review import (
 )
 ```
 
-See [docs/sdk.md](docs/sdk.md) for signatures, return types, the completed-decision versus refusal distinction,
+See [docs/sdk.md](https://github.com/Steady-Hand-AI/Steady-Hand-Metrifid/blob/main/docs/sdk.md) for signatures, return types, the completed-decision versus refusal distinction,
 output ownership, the native runtime requirement, and the concurrency statement.
 Runnable SDK scripts for `certify`, `compare`, `audit-timestep`, `qualify-workload`, and the
 Runtime Review execution journey live in
-[`examples/sdk/`](examples/sdk/). The Model Change Gate example lives in [`examples/model_release/`](examples/model_release/).
+[`examples/sdk/`](https://github.com/Steady-Hand-AI/Steady-Hand-Metrifid/tree/main/examples/sdk/). The Model Change Gate example lives in [`examples/model_release/`](https://github.com/Steady-Hand-AI/Steady-Hand-Metrifid/tree/main/examples/model_release/).
 
 ## License, ownership, and contributions
 
@@ -301,5 +301,5 @@ Copyright 2026 Volodymyr Barylyak. Metrifid is licensed under Apache License 2.0
 - `DCO` contains the Developer Certificate of Origin 1.1 used for contributed commits.
 - `docs/licensing_and_contributions.md` explains the relationship among those files.
 
-Contributions require a DCO sign-off as described in [`CONTRIBUTING.md`](CONTRIBUTING.md). The DCO is not a copyright
+Contributions require a DCO sign-off as described in [`CONTRIBUTING.md`](https://github.com/Steady-Hand-AI/Steady-Hand-Metrifid/blob/main/CONTRIBUTING.md). The DCO is not a copyright
 assignment; contributors retain copyright in their contributions.
