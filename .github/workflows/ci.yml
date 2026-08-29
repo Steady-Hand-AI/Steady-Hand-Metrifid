@@ -359,6 +359,11 @@ jobs:
           print(json.dumps(identity, sort_keys=True))
           PY
 
+      - name: Provision the constrained build frontend
+        if: matrix.tier == 'full'
+        run: |
+          python -m pip install -c .github/quality-constraints.txt build
+
       - name: Complete installed-wheel test suite
         if: matrix.tier == 'full'
         run: >-
@@ -486,7 +491,8 @@ jobs:
           python -m pip install "numpy==1.26.4" "mujoco==3.9.0"
           python -m pip install --no-deps "$(ls release-artifacts/dist/*.whl)"
           python -m pip install -c .github/quality-constraints.txt \
-            editables hatchling hypothesis mypy pytest pytest-check pytest-randomly pytest-xdist
+            build editables hatchling hypothesis mypy pytest pytest-check \
+            pytest-randomly pytest-xdist
 
       - name: Record the exact minimum runtime identity and support tier
         run: |
@@ -1020,7 +1026,8 @@ jobs:
           PY
           python -m pip install "$(ls release-artifacts/dist/*.whl)"
           python -m pip install -c .github/quality-constraints.txt \
-            editables hatchling hypothesis mypy pytest pytest-check pytest-randomly pytest-xdist
+            build editables hatchling hypothesis mypy pytest pytest-check \
+            pytest-randomly pytest-xdist
 
       - name: Record the diagnostic runtime identity
         run: |

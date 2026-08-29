@@ -32,7 +32,7 @@ _QUALITY_CONSTRAINTS = _REPOSITORY / ".github/quality-constraints.txt"
 _VALIDATOR = _REPOSITORY / ".github/scripts/validate_ci_evidence.py"
 
 # The expected digest of the frozen release workflow.
-_FROZEN_WORKFLOW_SHA256 = "ef532fe028251b85f432a326d10006f9859dfe8edb13b3a712b1e04cfeba3233"
+_FROZEN_WORKFLOW_SHA256 = "80a1ddf8a68c23846ca00b3b2a6746f2d2eaa3cbd2b588eee0c6b1d8376712a2"
 
 _ALL_JOBS = (
     "build_and_quality",
@@ -47,6 +47,9 @@ _ALL_JOBS = (
 )
 _FULL_LANES = ("linux_x64_py312_full", "linux_x64_py311_numpy_min")
 _SMOKE_LANES = ("linux_x64_py313", "linux_x64_py314", "macos_arm64_py314", "macos_x64_py312")
+# The jobs whose steps can execute the complete installed-wheel suite, and so the jobs that
+# must provision the build frontend those tests shell out to.
+_COMPLETE_SUITE_OWNERS = ("matrix_lane", "minimum_dependency_lane", "expanded_full_diagnostics")
 _PUBLIC_COMMANDS = (
     "certify",
     "review-model",
@@ -533,6 +536,111 @@ def test_ci_pins_the_exact_test_tools_every_pytest_lane_installs() -> None:
         assert "pytest-check" in job, name
         assert "pytest-xdist" in job, name
         assert "-c .github/quality-constraints.txt" in job, name
+
+
+# ---- The build frontend every complete installed-wheel suite needs ---------------------------------
+#
+# The committed distribution contract shells out to `python -m build`. A job that runs the complete
+# suite without the constrained build frontend fails those nine tests for a provisioning reason.
+# PyYAML is not installed in the lanes that run this suite, so the workflow is read as indented text.
+# The reads below are anchored to step boundaries, to property indentation, and to the installer
+# string, so a comment or a nested `run:` line is never mistaken for an active install.
+
+_COMPLETE_SUITE_MARKER = "full.xml tests"
+_CONSTRAINED_INSTALL = "python -m pip install -c .github/quality-constraints.txt"
+_FULL_TIER = "matrix.tier == 'full'"
+
+
+def _steps(job: str) -> list[str]:
+    """Return each step of one job body."""
+    return re.split(r"\n(?=      - )", job)[1:]
+
+
+def _constrained_packages(step: str) -> set[str]:
+    """Return every package this step installs through the constraints file.
+
+    Shell comments go first, so a commented-out install never counts as provisioning. Continuations
+    are then joined the way the shell joins them: the backslash and the newline are removed and the
+    next line's own indentation is what separates the arguments.
+    """
+    script = "\n".join(line.split("#", 1)[0] for line in step.splitlines())
+    packages: set[str] = set()
+    for command in script.replace("\\\n", "").split("\n"):
+        if _CONSTRAINED_INSTALL not in command:
+            continue
+        packages.update(
+            argument
+            for argument in command.split(_CONSTRAINED_INSTALL, 1)[1].split()
+            if not argument.startswith("-")
+        )
+    return packages
+
+
+def _step_property(step: str, name: str) -> str | None:
+    """Return one active property of a step, or None when the step does not set it.
+
+    Only a line at the step's own property indentation counts, so a value inside a `run:` block or
+    behind a `#` is never read as the property itself.
+    """
+    for line in step.splitlines():
+        if line.startswith(f"        {name}:") and not line[8:9].isspace():
+            return line.split(":", 1)[1].strip()
+    return None
+
+
+def _build_provisioning_steps(text: str, owner: str) -> list[str]:
+    """Return the steps of `owner` that install constrained build before its complete suite."""
+    steps = _steps(_job(text, owner))
+    suite = next(index for index, step in enumerate(steps) if _COMPLETE_SUITE_MARKER in step)
+    return [step for step in steps[:suite] if "build" in _constrained_packages(step)]
+
+
+def test_the_constraints_file_pins_the_build_frontend_exactly() -> None:
+    """Provisioning is only deterministic if the frontend itself is pinned to one version."""
+    constraints = _QUALITY_CONSTRAINTS.read_text(encoding="utf-8")
+    assert re.search(r"^build==[0-9]+(\.[0-9]+)+$", constraints, flags=re.MULTILINE), constraints
+
+
+def test_every_complete_suite_owner_provisions_the_constrained_build_frontend() -> None:
+    """Each job that can run the complete suite installs constrained build before pytest."""
+    text = _workflow_text()
+    owners = tuple(name for name in _ALL_JOBS if _COMPLETE_SUITE_MARKER in _job(text, name))
+    assert owners == _COMPLETE_SUITE_OWNERS, owners
+    for owner in owners:
+        assert len(_build_provisioning_steps(text, owner)) == 1, owner
+
+
+def test_the_matrix_build_provision_is_full_tier_only() -> None:
+    """Only the complete row acquires the frontend; the four smoke rows stay cheap."""
+    steps = _steps(_job(_workflow_text(), "matrix_lane"))
+    provisioning = [step for step in steps if "build" in _constrained_packages(step)]
+    assert len(provisioning) == 1, provisioning
+    assert _step_property(provisioning[0], "if") == _FULL_TIER
+    suite = next(step for step in steps if _COMPLETE_SUITE_MARKER in step)
+    assert _step_property(suite, "if") == _FULL_TIER
+
+
+def test_no_smoke_or_focused_only_lane_acquires_the_build_frontend() -> None:
+    """A lane that never runs the distribution tests has no reason to install a build frontend."""
+    text = _workflow_text()
+    for name in ("retained_compatibility_lane", "sdist_install_lane"):
+        job = _job(text, name)
+        assert all("build" not in _constrained_packages(step) for step in _steps(job)), name
+
+
+@pytest.mark.parametrize("owner", _COMPLETE_SUITE_OWNERS)
+def test_disabling_one_owners_provision_fails_the_contract(owner: str) -> None:
+    """Each owner is proved on its own, and a commented-out install never counts as provisioning."""
+    text = _workflow_text()
+    job = _job(text, owner)
+    provisioning = _build_provisioning_steps(text, owner)
+    assert len(provisioning) == 1, owner
+    disabled = provisioning[0].replace(_CONSTRAINED_INSTALL, f"# {_CONSTRAINED_INSTALL}", 1)
+    assert disabled != provisioning[0]
+    mutated = text.replace(job, job.replace(provisioning[0], disabled, 1), 1)
+    assert _build_provisioning_steps(mutated, owner) == []
+    for other in (name for name in _COMPLETE_SUITE_OWNERS if name != owner):
+        assert _build_provisioning_steps(mutated, other), other
 
 
 def test_every_exact_ci_pin_satisfies_its_development_extra_lower_bound() -> None:
