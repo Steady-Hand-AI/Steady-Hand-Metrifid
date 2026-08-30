@@ -22,6 +22,7 @@ from email.parser import BytesParser
 from pathlib import Path
 
 import pytest
+from packaging.requirements import Requirement
 
 _REQUIRED_SDIST_MEMBERS = (
     "README.md",
@@ -39,6 +40,14 @@ _REQUIRED_SDIST_MEMBERS = (
     "tools/native_upgrade_profile_worker.py",
 )
 _COMPARED_METADATA_FIELDS = ("Name", "Version", "Summary", "Requires-Python")
+# The supported platform classes the project publishes for. Exactly one of them resolves MuJoCo
+# under a ceiling, because upstream publishes no Darwin x86_64 wheel at or above 3.11.
+_SUPPORTED_PLATFORMS = {
+    "intel macOS": {"platform_system": "Darwin", "platform_machine": "x86_64"},
+    "Apple silicon macOS": {"platform_system": "Darwin", "platform_machine": "arm64"},
+    "Linux x86_64": {"platform_system": "Linux", "platform_machine": "x86_64"},
+    "Linux aarch64": {"platform_system": "Linux", "platform_machine": "aarch64"},
+}
 _FROZEN_WORKER_RESOURCE = "metrifid/runtime_review/native_evidence_worker.py.txt"
 _FROZEN_WORKER_SHA256 = "b00e509a344593806c088c4e49783ed71bacd815466d74bce9e27c931535b4ff"
 
@@ -281,3 +290,63 @@ def test_artifacts_report_the_authoritative_source_version(
     assert distributions["wheel"].name == f"metrifid-{version}-py3-none-any.whl"
     assert distributions["sdist"].name == f"metrifid-{version}.tar.gz"
     assert distributions["rebuilt"].name == f"metrifid-{version}-py3-none-any.whl"
+
+
+def _declared_mujoco_resolution(metadata: Message) -> dict[str, tuple[str, ...] | None]:
+    """How each supported platform class resolves MuJoCo under one distribution's metadata.
+
+    ``None`` for a platform means the requirement set is not well formed there: either no MuJoCo
+    requirement applies or more than one does. Both are contract failures.
+    """
+    runtime = [
+        value
+        for value in (metadata.get_all("Requires-Dist") or [])
+        if "extra ==" not in value and Requirement(value).name == "mujoco"
+    ]
+    resolution: dict[str, tuple[str, ...] | None] = {}
+    for label, environment in _SUPPORTED_PLATFORMS.items():
+        active = [
+            requirement
+            for requirement in (Requirement(value) for value in runtime)
+            if requirement.marker is None or requirement.marker.evaluate(environment)
+        ]
+        resolution[label] = (
+            tuple(sorted(str(specifier) for specifier in active[0].specifier))
+            if len(active) == 1
+            else None
+        )
+    return resolution
+
+
+def test_every_distribution_form_declares_the_same_platform_resolution(
+    distributions: dict[str, Path],
+) -> None:
+    """The wheel, the sdist's own metadata and the sdist-rebuilt wheel must agree exactly.
+
+    The Intel macOS bound exists because upstream publishes no Darwin x86_64 MuJoCo wheel at or
+    above 3.11. A bound that reached the wheel but not the sdist, or that survived the direct
+    build but not the rebuild from source, would leave one published install path still broken.
+    Marker mutation controls live with the metadata contract; this asserts only that every
+    published form carries the same declared semantics and the authoritative version.
+    """
+    version = _authoritative_source_version()
+    expected = {
+        "intel macOS": ("<3.11", ">=3.9"),
+        "Apple silicon macOS": (">=3.9",),
+        "Linux x86_64": (">=3.9",),
+        "Linux aarch64": (">=3.9",),
+    }
+    observed = {
+        "wheel": _metadata(distributions["wheel"]),
+        "sdist": _sdist_metadata(distributions["sdist"]),
+        "rebuilt": _metadata(distributions["rebuilt"]),
+    }
+    for form, metadata in observed.items():
+        assert metadata.get("Version") == version, form
+        assert _declared_mujoco_resolution(metadata) == expected, form
+        numpy = [
+            value
+            for value in (metadata.get_all("Requires-Dist") or [])
+            if "extra ==" not in value and Requirement(value).name == "numpy"
+        ]
+        assert numpy == ["numpy>=1.26"], (form, numpy)

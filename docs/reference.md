@@ -366,15 +366,19 @@ a POSIX operating system reporting `Linux` or `Darwin` together with the exact `
 `follow_symlinks`, `fd`, callable, and open-flag capabilities the confined filesystem work needs.
 Native Windows is unsupported because those capabilities are absent; WSL is the documented route.
 
-The MuJoCo package floor is `mujoco>=3.9`, with no minor ceiling. Only stable three-component
+The MuJoCo runtime floor is stable `3.9`, with no minor ceiling on any platform. The declared
+package requirement is `mujoco>=3.9,<3.11` on Darwin `x86_64`, because upstream publishes no
+Intel macOS wheel at or above 3.11, and `mujoco>=3.9` with no ceiling elsewhere; that bound is a
+dependency-resolution marker, not a runtime gate. Only stable three-component
 versions (optionally carrying a post or local suffix) are considered; prerelease and development
 forms refuse. The package base, native version string, and algorithmically encoded native integer
 must agree exactly. The retained validated profiles are 3.9.0, 3.10.0, 3.11.0, and 3.12.0. A later
 stable release can be capability-admitted but is explicitly unvalidated. NumPy is `>=1.26` with no
 runtime upper bound and no runtime version gate.
 
-The resolver-selected newest stable MuJoCo is the primary development and release authority—3.12.0
-for the frozen 2026-08-22 snapshot. Exact 3.9.0 remains the minimum profile; 3.10.0 and 3.11.0 are
+On platforms carrying no packaging ceiling, the resolver-selected newest stable MuJoCo is the
+primary development and release authority—3.12.0 for the frozen 2026-08-22 snapshot; on Darwin
+`x86_64` the resolver selects the newest stable release below 3.11. Exact 3.9.0 remains the minimum profile; 3.10.0 and 3.11.0 are
 retained backward-compatibility profiles. Evidence binds the exact admitted package/native identity.
 
 Capability admission is operation-specific. `certify` needs only compiled-artifact capabilities;

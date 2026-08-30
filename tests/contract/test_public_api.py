@@ -8,9 +8,13 @@ import json
 import os
 import subprocess
 import sys
+from collections.abc import Callable, Iterable, Mapping
 from pathlib import Path
 
+import pytest
 import pytest_check as check
+from packaging.markers import Marker
+from packaging.requirements import Requirement
 
 import metrifid
 from metrifid.version import __version__ as CURRENT_VERSION
@@ -94,6 +98,148 @@ def _normalize_requirement(requirement: str) -> tuple[str, tuple[str, ...]]:
     return name, _specifier_parts(token[cut:].strip())
 
 
+# The supported platform classes this project publishes for. Upstream MuJoCo ships Darwin x86_64
+# wheels only below 3.11, so exactly one of these four resolves under a ceiling.
+_INTEL_MACOS: dict[str, str] = {"platform_system": "Darwin", "platform_machine": "x86_64"}
+_SUPPORTED_ENVIRONMENTS: dict[str, dict[str, str]] = {
+    "intel macOS": _INTEL_MACOS,
+    "Apple silicon macOS": {"platform_system": "Darwin", "platform_machine": "arm64"},
+    "Linux x86_64": {"platform_system": "Linux", "platform_machine": "x86_64"},
+    "Linux aarch64": {"platform_system": "Linux", "platform_machine": "aarch64"},
+}
+
+
+def _runtime_requirements(requirements: Iterable[str]) -> list[str]:
+    """Return the runtime requirements, excluding every optional extra."""
+    return [requirement for requirement in requirements if "extra ==" not in requirement]
+
+
+def _requirement_marker(requirement: str) -> Marker | None:
+    """Return the PEP 508 environment marker of one requirement, if it carries one."""
+    return Requirement(requirement).marker
+
+
+def _active_mujoco_specifiers(
+    requirements: Iterable[str], environment: Mapping[str, str]
+) -> tuple[str, ...] | None:
+    """Return the specifiers of the single MuJoCo requirement active in one environment.
+
+    ``None`` means the requirement set is not well formed for that environment: either no MuJoCo
+    requirement applies, or more than one does. Both are contract failures, and reporting them the
+    same way lets the mutation controls below assert against real behaviour rather than against a
+    string edit.
+    """
+    active = [
+        requirement
+        for requirement in _runtime_requirements(requirements)
+        if _normalize_requirement(requirement)[0] == "mujoco"
+        and ((marker := _requirement_marker(requirement)) is None or marker.evaluate(environment))
+    ]
+    if len(active) != 1:
+        return None
+    return tuple(sorted(_normalize_requirement(active[0])[1]))
+
+
+def _mujoco_resolution_problems(requirements: Iterable[str]) -> list[str]:
+    """Return one problem per supported platform whose MuJoCo resolution is wrong.
+
+    This is the whole contract in one function so it can be run against the real published
+    metadata and against deliberately broken variants of it. A control that only proved a string
+    edit changed a string would prove nothing about resolution.
+    """
+    requirements = list(requirements)
+    problems: list[str] = []
+    for label, environment in _SUPPORTED_ENVIRONMENTS.items():
+        active = _active_mujoco_specifiers(requirements, environment)
+        if active is None:
+            problems.append(f"{label}: exactly one MuJoCo requirement must apply, none or many do")
+            continue
+        expected = ("<3.11", ">=3.9") if environment is _INTEL_MACOS else (">=3.9",)
+        if active != expected:
+            problems.append(f"{label}: MuJoCo resolves to {active}, expected {expected}")
+    return problems
+
+
+def test_intel_macos_resolves_mujoco_under_the_published_ceiling() -> None:
+    """Darwin x86_64 must activate exactly >=3.9,<3.11 and nothing else."""
+    import importlib.metadata as metadata
+
+    requirements = metadata.distribution("metrifid").requires or []
+    assert _active_mujoco_specifiers(requirements, _INTEL_MACOS) == ("<3.11", ">=3.9")
+
+
+def test_every_other_supported_platform_resolves_mujoco_without_a_ceiling() -> None:
+    """Linux and Apple silicon must activate exactly >=3.9, with no upper bound."""
+    import importlib.metadata as metadata
+
+    requirements = metadata.distribution("metrifid").requires or []
+    for label, environment in _SUPPORTED_ENVIRONMENTS.items():
+        if environment is _INTEL_MACOS:
+            continue
+        assert _active_mujoco_specifiers(requirements, environment) == (">=3.9",), label
+
+
+def test_the_two_mujoco_markers_are_exclusive_and_exhaustive() -> None:
+    """Exactly one MuJoCo requirement applies on every supported platform class."""
+    import importlib.metadata as metadata
+
+    requirements = metadata.distribution("metrifid").requires or []
+    assert _mujoco_resolution_problems(requirements) == []
+
+
+@pytest.mark.parametrize(
+    ("mutation", "description"),
+    [
+        (
+            lambda text: text.replace(
+                "platform_system != 'Darwin' or platform_machine != 'x86_64'",
+                "platform_system != 'Darwin' and platform_machine != 'x86_64'",
+            ),
+            "the complement uses and instead of or",
+        ),
+        (lambda text: text.replace("<3.11,", ""), "the Intel ceiling is removed"),
+        (lambda text: text.replace("<3.11", "<4.0"), "the Intel ceiling is raised past 3.11"),
+        (lambda text: text.replace("<3.11", "<3.12"), "the Intel ceiling is raised to 3.12"),
+        (
+            lambda text: text.replace(
+                "mujoco>=3.9; platform_system !=", "mujoco<3.11,>=3.9; platform_system !="
+            ),
+            "the ceiling leaks onto every other platform",
+        ),
+        (
+            lambda text: text.replace(
+                "; platform_system == 'Darwin' and platform_machine == 'x86_64'", ""
+            ),
+            "the Intel requirement loses its marker and applies everywhere",
+        ),
+    ],
+    ids=[
+        "and-instead-of-or",
+        "ceiling-removed",
+        "ceiling-raised-to-4",
+        "ceiling-raised-to-312",
+        "ceiling-leaks",
+        "marker-dropped",
+    ],
+)
+def test_breaking_the_mujoco_markers_is_detected(
+    mutation: Callable[[str], str], description: str
+) -> None:
+    """Each way of breaking the declared resolution must be caught by the same contract.
+
+    The mutation is applied to the real published requirements and the result is fed back through
+    the very function the positive tests use, so a passing control means the contract rejects the
+    broken metadata, not merely that a substring changed.
+    """
+    import importlib.metadata as metadata
+
+    real = _runtime_requirements(metadata.distribution("metrifid").requires or [])
+    assert _mujoco_resolution_problems(real) == [], "the shipped metadata must be clean first"
+    mutated = [mutation(requirement) for requirement in real]
+    assert mutated != real, f"the mutation did not change anything: {description}"
+    assert _mujoco_resolution_problems(mutated), description
+
+
 def test_version_matches_installed_metadata() -> None:
     """Protect the supported user interface from accidental drift.
 
@@ -165,12 +311,15 @@ def test_the_installed_commands_and_runtime_dependencies_are_declared() -> None:
         if entry.group == "console_scripts"
     }
     assert scripts == {"metrifid": "metrifid.cli:main"}
-    runtime = {
-        _normalize_requirement(requirement)
-        for requirement in (distribution.requires or [])
-        if "extra ==" not in requirement
+    runtime = _runtime_requirements(distribution.requires or [])
+    assert {_normalize_requirement(requirement)[0] for requirement in runtime} == {
+        "mujoco",
+        "numpy",
     }
-    assert runtime == {("mujoco", (">=3.9",)), ("numpy", (">=1.26",))}
+    assert [r for r in runtime if _normalize_requirement(r)[0] == "numpy"] == ["numpy>=1.26"]
+    # MuJoCo is declared as two complementary environment-marked requirements; exactly which one
+    # applies is the subject of the platform-resolution contracts below.
+    assert len([r for r in runtime if _normalize_requirement(r)[0] == "mujoco"]) == 2
 
 
 def test_the_declared_python_support_has_no_upper_bound() -> None:
@@ -185,16 +334,29 @@ def test_the_declared_python_support_has_no_upper_bound() -> None:
         assert f"Programming Language :: Python :: {minor}" in classifiers
 
 
-def test_no_runtime_dependency_declares_an_upper_bound() -> None:
-    """Keep every runtime dependency on a minimum-only specifier with no ceiling."""
+def test_only_the_intel_macos_mujoco_requirement_declares_a_ceiling() -> None:
+    """Keep every runtime dependency minimum-only except the one reproduced platform exception.
+
+    Upstream publishes no Darwin x86_64 MuJoCo wheel at or above 3.11, so an ordinary install
+    there resolves to a source archive that cannot build. That one requirement carries a ceiling;
+    nothing else may, and the ceiling may not apply anywhere else.
+    """
     import importlib.metadata as metadata
 
-    for requirement in metadata.distribution("metrifid").requires or []:
-        if "extra ==" in requirement:
-            continue
+    for requirement in _runtime_requirements(metadata.distribution("metrifid").requires or []):
         name, specifiers = _normalize_requirement(requirement)
-        for specifier in specifiers:
-            assert specifier.startswith(">="), (name, specifier)
+        bounded = [s for s in specifiers if not s.startswith(">=")]
+        if not bounded:
+            continue
+        assert name == "mujoco", (name, specifiers)
+        assert bounded == ["<3.11"], specifiers
+        marker = _requirement_marker(requirement)
+        assert marker is not None, requirement
+        assert marker.evaluate(_INTEL_MACOS), requirement
+        for label, environment in _SUPPORTED_ENVIRONMENTS.items():
+            if environment is _INTEL_MACOS:
+                continue
+            assert not marker.evaluate(environment), (label, requirement)
 
 
 def test_the_development_extra_declares_no_ceiling_and_no_numpy() -> None:

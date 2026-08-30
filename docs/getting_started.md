@@ -220,7 +220,8 @@ The current source declares:
 
 ```text
 Python:          3.11 or newer, with no artificial upper bound
-MuJoCo package:  stable MuJoCo >=3.9, with no minor-version ceiling
+MuJoCo runtime:  stable MuJoCo >=3.9, capability-based, with no minor-version ceiling
+MuJoCo package:  >=3.9,<3.11 on Darwin x86_64; >=3.9 with no ceiling elsewhere
 MuJoCo identity: package base, native string, and native integer must agree
 Validated exact: 3.9.0, 3.10.0, 3.11.0, and 3.12.0
 NumPy:           1.26 or newer, with no runtime upper bound
@@ -228,10 +229,18 @@ Operating system: Linux or macOS with the required POSIX filesystem capabilities
 Architecture:    recorded as evidence, not rejected through an architecture allowlist
 ```
 
-The newest stable MuJoCo is the primary development and release profile—3.12.0 for the frozen
-2026-08-22 snapshot. Exact 3.9.0 is the supported minimum, and retained 3.10.0 and 3.11.0 results are
-backward-compatibility evidence. A normal installation keeps the `mujoco>=3.9` resolver policy and
-therefore encounters a newer stable release automatically.
+On platforms without the packaging exception below, the newest stable MuJoCo is the primary
+development and release profile—3.12.0 for the frozen 2026-08-22 snapshot. Exact 3.9.0 is the
+supported minimum, and retained 3.10.0 and 3.11.0 results are backward-compatibility evidence.
+A normal installation there keeps the `mujoco>=3.9` resolver policy and therefore encounters a
+newer stable release automatically.
+
+Package resolution carries one platform exception: upstream publishes no Intel macOS wheel for
+MuJoCo 3.11 or newer, so the declared dependency is `mujoco>=3.9,<3.11` on Darwin `x86_64` and
+`mujoco>=3.9` with no minor ceiling on every other supported platform. That bound is read by
+the installer when resolving dependencies; it does not narrow runtime admission, which stays
+capability-based for stable MuJoCo 3.9 or newer on every architecture.
+On Intel macOS a normal installation therefore resolves the newest stable MuJoCo below 3.11.
 
 Native Windows is not currently supported because Metrifid’s confined filesystem operations rely on POSIX descriptor-relative behavior. Windows users should use WSL.
 

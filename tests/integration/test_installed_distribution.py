@@ -8,11 +8,14 @@ import importlib.metadata as metadata
 import importlib.resources as resources
 import json
 import os
+import platform
 import subprocess
 import sys
 import sysconfig
 from pathlib import Path
 from typing import cast
+
+from packaging.requirements import Requirement
 
 import metrifid
 from metrifid.json_values import installed_distribution_identity, installed_distribution_sha256
@@ -147,9 +150,30 @@ def test_installed_runtime_review_execution_help_is_complete(tmp_path: Path) -> 
     assert "existing Runtime Review evaluator" in normalized
 
 
+def _active_runtime_requirements() -> list[Requirement]:
+    """Return the runtime requirements this environment actually resolves under."""
+    parsed = [
+        Requirement(requirement)
+        for requirement in (metadata.requires("metrifid") or [])
+        if "extra ==" not in requirement
+    ]
+    return [r for r in parsed if r.marker is None or r.marker.evaluate()]
+
+
+def _is_intel_macos() -> bool:
+    """The one platform class whose MuJoCo resolution carries a published ceiling."""
+    return (platform.system(), platform.machine()) == ("Darwin", "x86_64")
+
+
 def test_public_package_and_runtime_dependency_are_installed() -> None:
-    """Verify that the public package and its rolling MuJoCo floor are installed."""
-    from importlib import import_module, metadata
+    """Verify the public package and the MuJoCo requirement this platform actually resolves.
+
+    This runs inside a real installation, so the declared requirement is checked against the
+    MuJoCo that is genuinely importable here rather than against a requirement string in the
+    abstract. Exactly one MuJoCo requirement may be active, and its ceiling must be present on
+    Intel macOS and absent everywhere else.
+    """
+    from importlib import import_module
 
     for module_name in (
         "metrifid._model_closure",
@@ -160,12 +184,26 @@ def test_public_package_and_runtime_dependency_are_installed() -> None:
     ):
         module = import_module(module_name)
         assert "site-packages" in Path(module.__file__).resolve().parts
-    requirements = [
-        requirement.split(";")[0].replace(" ", "")
-        for requirement in (metadata.requires("metrifid") or [])
-        if "extra ==" not in requirement
-    ]
-    assert "mujoco>=3.9" in requirements
-    assert not [value for value in requirements if value.startswith("mujoco") and "<" in value]
-    assert "numpy>=1.26" in requirements
-    assert not [value for value in requirements if value.startswith("numpy") and "<" in value]
+
+    active = _active_runtime_requirements()
+    assert {requirement.name for requirement in active} == {"mujoco", "numpy"}
+
+    mujoco_requirements = [r for r in active if r.name == "mujoco"]
+    assert len(mujoco_requirements) == 1, [str(r) for r in mujoco_requirements]
+    mujoco_specifier = mujoco_requirements[0].specifier
+    assert ">=3.9" in {str(s) for s in mujoco_specifier}
+    ceilings = {str(s) for s in mujoco_specifier if s.operator in ("<", "<=")}
+    assert ceilings == ({"<3.11"} if _is_intel_macos() else set()), (
+        platform.system(),
+        platform.machine(),
+        ceilings,
+    )
+    # The requirement the environment resolves under must admit the MuJoCo that is installed.
+    assert metadata.version("mujoco") in mujoco_specifier, (
+        metadata.version("mujoco"),
+        str(mujoco_specifier),
+    )
+
+    numpy_requirements = [r for r in active if r.name == "numpy"]
+    assert [str(r) for r in numpy_requirements] == ["numpy>=1.26"]
+    assert metadata.version("numpy") in numpy_requirements[0].specifier

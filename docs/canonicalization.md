@@ -92,9 +92,18 @@ Canonicalization, the exact-number helpers, and receipt parsing and validation a
 invoke the shared native runtime gate, so they work under Python 3.11 or newer without MuJoCo
 admission, on Linux, on macOS, and on Windows. Commands that compile or step a model do require that
 gate, and native Windows is unsupported for them; WSL is the documented route. Those commands use
-the exact admitted package/native runtime and bind its identity to evidence. The resolver-selected
-newest stable MuJoCo is the primary development and release profile—3.12.0 for the frozen 2026-08-22
-snapshot—while exact retained older profiles remain compatibility-tested.
+the exact admitted package/native runtime and bind its identity to evidence. On platforms that
+carry no packaging ceiling, the resolver-selected newest stable MuJoCo is the primary development
+and release profile—3.12.0 for the frozen 2026-08-22 snapshot—while exact retained older profiles
+remain compatibility-tested.
+
+Package resolution carries one platform exception. Upstream publishes no Intel macOS wheel for
+MuJoCo 3.11 or newer, so the declared dependency is `mujoco>=3.9,<3.11` on Darwin `x86_64` and
+`mujoco>=3.9` with no minor ceiling on every other supported platform, and an ordinary install
+there resolves the newest stable release below 3.11. That bound is dependency resolution driven by
+upstream wheel availability; it is read by the installer and does not change runtime admission,
+which stays architecture-neutral and capability-based for stable MuJoCo 3.9 or newer. Whatever
+version is admitted is still recorded exactly in evidence.
 
 ### Root and manifest binding
 

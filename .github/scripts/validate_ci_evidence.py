@@ -33,7 +33,8 @@ import sys
 import xml.etree.ElementTree as ElementTree
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath
+from urllib.parse import unquote, urlsplit
 
 SUPPORT_TIER = "ADMITTED_CAPABILITY_COMPATIBLE_PROFILE"
 OBJECT_ID = re.compile(r"[0-9a-f]{40}")
@@ -82,6 +83,11 @@ class Expectation:
     # would make a resolver lane look fixed and quietly stop testing what it exists to test.
     mujoco_version: str | None = None
     numpy_version: str | None = None
+    # ``None`` means this lane places no packaging ceiling on MuJoCo. A value is the exclusive
+    # ``(major, minor)`` bound that the published metadata must have applied on this platform,
+    # and it additionally requires the lane to ship pip's own install report so the summary can
+    # check which distribution the resolver actually selected rather than trusting the runner.
+    mujoco_wheel_ceiling: tuple[int, int] | None = None
 
 
 # The two default complete suites and the four boundary smokes, with the exact coordinate each one
@@ -94,7 +100,13 @@ LANE_EXPECTATIONS: Mapping[str, Expectation] = {
     "linux_x64_py313": Expectation("smoke", "Linux", "x86_64", "3.13"),
     "linux_x64_py314": Expectation("smoke", "Linux", "x86_64", "3.14"),
     "macos_arm64_py314": Expectation("smoke", "Darwin", "arm64", "3.14"),
-    "macos_x64_py312": Expectation("smoke", "Darwin", "x86_64", "3.12", mujoco_version="3.10.0"),
+    # Upstream publishes no Darwin x86_64 wheel for MuJoCo 3.11 or newer, so the project metadata
+    # bounds resolution on this one platform. The exact version is deliberately not pinned here:
+    # the lane exists to prove the published marker selects a wheel-backed release below the
+    # ceiling, which a hard-coded version would stop testing.
+    "macos_x64_py312": Expectation(
+        "smoke", "Darwin", "x86_64", "3.12", mujoco_wheel_ceiling=(3, 11)
+    ),
 }
 FULL_LANES: tuple[str, ...] = tuple(
     name for name, want in LANE_EXPECTATIONS.items() if want.tier == "full"
@@ -274,6 +286,15 @@ def _at_least(triplet: tuple[int, int, int], floor: tuple[int, int], description
     )
 
 
+def _below(triplet: tuple[int, int, int], ceiling: tuple[int, int], description: str) -> None:
+    """Require a version to be strictly below a declared exclusive packaging ceiling."""
+    _require(
+        triplet[:2] < ceiling,
+        f"{description} {'.'.join(str(part) for part in triplet)} is at or above the declared "
+        f"ceiling {ceiling[0]}.{ceiling[1]}",
+    )
+
+
 def _nonempty_string(value: object, description: str) -> str:
     """Require one evidence field to be a real string rather than null or a number."""
     _require(isinstance(value, str), f"{description} must be a string, got {type(value).__name__}")
@@ -346,6 +367,8 @@ def _validate_mujoco_identity(
         # A resolver-latest lane must report a real admitted runtime, but pinning it here would
         # freeze the very thing it exists to keep moving.
         _at_least(package, MINIMUM_MUJOCO, f"{subject} resolver-latest MuJoCo")
+    if want.mujoco_wheel_ceiling is not None:
+        _below(package, want.mujoco_wheel_ceiling, f"{subject} packaging-bounded MuJoCo")
 
 
 def _validate_python_identity(
@@ -432,6 +455,192 @@ def _validate_original_binding(
     return actual
 
 
+def _install_entry(
+    report: Mapping[str, object], name: str, subject: str
+) -> tuple[Mapping[str, object], str, str]:
+    """Return one distribution's install-report entry, its version, and its source URL."""
+    entries = report.get("install")
+    _require(isinstance(entries, list), f"{subject} install report has no install list")
+    assert isinstance(entries, list)
+    matched: list[Mapping[str, object]] = []
+    for entry in entries:
+        _require(isinstance(entry, dict), f"{subject} install report has a malformed entry")
+        assert isinstance(entry, dict)
+        metadata = entry.get("metadata")
+        _require(isinstance(metadata, dict), f"{subject} install entry has no metadata")
+        assert isinstance(metadata, dict)
+        recorded = metadata.get("name")
+        _require(isinstance(recorded, str), f"{subject} install entry has no distribution name")
+        assert isinstance(recorded, str)
+        if recorded.lower().replace("_", "-") == name:
+            matched.append(entry)
+    _require(
+        len(matched) == 1,
+        f"{subject} install report records {len(matched)} {name} entries, expected exactly one",
+    )
+    entry = matched[0]
+    metadata = entry["metadata"]
+    assert isinstance(metadata, dict)
+    version = _nonempty_string(metadata.get("version"), f"{subject} {name} install version")
+    download = entry.get("download_info")
+    _require(isinstance(download, dict), f"{subject} {name} entry has no download_info")
+    assert isinstance(download, dict)
+    url = _nonempty_string(download.get("url"), f"{subject} {name} download url")
+    return entry, version, url
+
+
+def _url_basename(url: str, description: str) -> str:
+    """Return the decoded final path segment of a download URL.
+
+    Parsed rather than string-matched: a query string, a percent-encoded name or a longer path
+    must not be able to make an unrelated artifact look like the accepted one.
+    """
+    name = PurePosixPath(unquote(urlsplit(url).path)).name
+    _require(bool(name), f"{description} has no file name: {url!r}")
+    return name
+
+
+def _wheel_filename_version(filename: str, description: str) -> str:
+    """Return the version field a wheel filename encodes."""
+    _require(filename.endswith(".whl"), f"{description} {filename!r} is not a wheel")
+    parts = filename[: -len(".whl")].split("-")
+    _require(
+        len(parts) in (5, 6),
+        f"{description} {filename!r} is not a wheel filename with the required fields",
+    )
+    return parts[1]
+
+
+def _validate_install_report(
+    directory: Path,
+    subject: str,
+    want: Expectation,
+    manifest: Mapping[str, object],
+    identity: Mapping[str, object],
+) -> None:
+    """Bind one lane to pip's own report of the candidate-wheel installation.
+
+    The runner label and the imported module version both describe the machine after the fact.
+    This reads the resolve itself: which distribution pip chose for MuJoCo, whether that
+    distribution was a wheel or a source archive, and which environment it resolved against. A
+    lane whose published metadata stopped bounding the platform would still import a working
+    MuJoCo if the runner happened to have one, and only this evidence would notice.
+
+    The report is bound on both sides. Its MuJoCo entry must name the runtime the lane actually
+    imported, not merely another release inside the same range, because two versions that each
+    satisfy the bound still cannot both describe one installation. Its directly requested entry
+    must name the accepted candidate wheel by file name, by archive digest, and by the version
+    that file name encodes, so a report describing some other artifact cannot stand in for it.
+    """
+    ceiling = want.mujoco_wheel_ceiling
+    assert ceiling is not None
+    report = _read_json(directory / "install_report.json", f"{subject} install report")
+    _require(
+        report.get("version") == "1",
+        f"{subject} install report declares schema version {report.get('version')!r}, not '1'",
+    )
+
+    environment = report.get("environment")
+    _require(isinstance(environment, dict), f"{subject} install report has no environment")
+    assert isinstance(environment, dict)
+    for field_name, expected in (
+        ("platform_system", want.platform_system),
+        ("platform_machine", want.platform_machine),
+    ):
+        recorded = _nonempty_string(
+            environment.get(field_name), f"{subject} install report {field_name}"
+        )
+        _require(
+            recorded == expected,
+            f"{subject} resolved against {field_name} {recorded!r}, not {expected!r}; the "
+            f"install report does not describe the platform this lane exists to prove",
+        )
+
+    entries = report.get("install")
+    _require(isinstance(entries, list), f"{subject} install report has no install list")
+    assert isinstance(entries, list)
+    # A --no-deps installation records only the requested wheel. This lane exists to observe the
+    # dependency resolve, so an install that never resolved anything is not the evidence claimed.
+    _require(
+        len(entries) > 1,
+        f"{subject} install report records only {len(entries)} distribution: the candidate wheel "
+        f"was not installed with its dependencies",
+    )
+
+    direct = [
+        entry
+        for entry in entries
+        if isinstance(entry, dict)
+        and entry.get("is_direct") is True
+        and entry.get("requested") is True
+    ]
+    _require(
+        len(direct) == 1,
+        f"{subject} install report records {len(direct)} directly requested distributions, "
+        f"expected exactly the candidate wheel",
+    )
+    candidate, candidate_version, candidate_url = _install_entry(report, "metrifid", subject)
+    _require(
+        candidate is direct[0],
+        f"{subject} did not install the candidate wheel as the directly requested distribution",
+    )
+
+    wheel = manifest.get("wheel")
+    _require(isinstance(wheel, dict), f"{subject} original manifest has no wheel entry")
+    assert isinstance(wheel, dict)
+    accepted_name = _nonempty_string(wheel.get("filename"), f"{subject} manifest wheel filename")
+    accepted_digest = _nonempty_string(wheel.get("sha256"), f"{subject} manifest wheel sha256")
+
+    installed_name = _url_basename(candidate_url, f"{subject} candidate download url")
+    _require(
+        installed_name.endswith(".whl"),
+        f"{subject} installed the candidate from {installed_name!r}, which is not a wheel",
+    )
+    _require(
+        installed_name == accepted_name,
+        f"{subject} installed {installed_name!r}, not the accepted candidate {accepted_name!r}",
+    )
+
+    download = candidate["download_info"]
+    assert isinstance(download, dict)
+    archive = download.get("archive_info")
+    _require(isinstance(archive, dict), f"{subject} candidate entry records no archive_info")
+    assert isinstance(archive, dict)
+    hashes = archive.get("hashes")
+    _require(isinstance(hashes, dict), f"{subject} candidate archive records no hashes")
+    assert isinstance(hashes, dict)
+    recorded_digest = hashes.get("sha256")
+    _require(
+        recorded_digest == accepted_digest,
+        f"{subject} candidate archive sha256 is {recorded_digest!r}, not the accepted "
+        f"{accepted_digest!r}",
+    )
+    _require(
+        candidate_version
+        == _wheel_filename_version(accepted_name, f"{subject} accepted candidate"),
+        f"{subject} candidate reports version {candidate_version!r}, which is not the version "
+        f"encoded by the accepted wheel {accepted_name!r}",
+    )
+
+    _, mujoco_version, mujoco_url = _install_entry(report, "mujoco", subject)
+    _require(
+        _url_basename(mujoco_url, f"{subject} MuJoCo download url").endswith(".whl"),
+        f"{subject} resolved MuJoCo to {mujoco_url.rsplit('/', 1)[-1]!r}, which is not a wheel: "
+        f"a source archive is the exact failure the platform bound exists to prevent",
+    )
+    triplet = _mujoco_package_triplet(mujoco_version, f"{subject} resolved MuJoCo version")
+    _at_least(triplet, MINIMUM_MUJOCO, f"{subject} resolved MuJoCo")
+    _below(triplet, ceiling, f"{subject} resolved MuJoCo")
+    # Two releases can each satisfy the bound and still not be the same installation. The resolve
+    # and the imported runtime must be one identity, not two compatible ones.
+    _require(
+        mujoco_version == identity.get("package_version"),
+        f"{subject} resolved MuJoCo {mujoco_version!r} but imported "
+        f"{identity.get('package_version')!r}: the install report and the runtime identity "
+        f"describe different installations",
+    )
+
+
 def _validate_lane(directory: Path, lane_id: str, manifest: Mapping[str, object]) -> LaneReport:
     """Validate one normal lane against its exact declared boundary."""
     want = LANE_EXPECTATIONS[lane_id]
@@ -443,7 +652,9 @@ def _validate_lane(directory: Path, lane_id: str, manifest: Mapping[str, object]
         f"lane {lane_id} declares tier {recorded_tier!r} where the summary requires {want.tier!r}",
     )
     digest = _validate_original_binding(directory, lane_id, manifest, "wheel")
-    _validate_identity(directory, lane_id, want)
+    identity = _validate_identity(directory, lane_id, want)
+    if want.mujoco_wheel_ceiling is not None:
+        _validate_install_report(directory, lane_id, want, manifest, identity)
     _validate_command_coverage(directory, lane_id)
     if want.tier == "full":
         cases, skipped = _junit_cases(directory / "full.xml", f"{lane_id} complete suite")

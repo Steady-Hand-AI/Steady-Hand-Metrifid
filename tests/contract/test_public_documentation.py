@@ -719,3 +719,132 @@ def test_the_stale_surface_assertion_reacts_to_reverted_prose() -> None:
     text = _sdk()
     assert stale_surface_count_problems(text) == []
     assert stale_surface_count_problems(text + "\nIt applies to all five operations.\n") != []
+
+
+# ---- The Intel macOS packaging exception must be stated, and stated as packaging ---------------
+#
+# Upstream publishes no Darwin x86_64 MuJoCo wheel at or above 3.11, so the project bounds
+# dependency resolution on that one platform. Two opposite errors are possible in the public
+# documents. The exception can disappear, leaving the old unqualified "no minor ceiling" claim that
+# an Intel macOS reader would find untrue. Or it can be overstated into a runtime ceiling, which
+# would wrongly tell every reader that Metrifid refuses MuJoCo 3.11 or newer. Both are checked.
+
+_PACKAGING_EXCEPTION_DOCUMENTS = (
+    "README.md",
+    "docs/canonicalization.md",
+    "docs/getting_started.md",
+    "docs/reference.md",
+    "docs/sdk.md",
+    "docs/compiled_certification.md",
+    "docs/capabilities_and_use_cases.md",
+)
+
+_CEILING_CLAIM = re.compile(r"<\s*3\.11|below 3\.11|at or above 3\.11", re.IGNORECASE)
+_PACKAGING_WORDS = (
+    "package",
+    "dependency",
+    "resolution",
+    "resolver",
+    "install",
+    "wheel",
+    "metadata",
+)
+_RUNTIME_WORDS = ("runtime admission", "runtime gate", "admits", "admitted", "capability-based")
+
+
+def _sentences(flat_text: str) -> list[str]:
+    """Split flattened prose into sentences for claim-level checks."""
+    return [part.strip() for part in re.split(r"(?<=[.:])\s+", flat_text) if part.strip()]
+
+
+def intel_packaging_exception_problems(text: str) -> list[str]:
+    """Return one problem per way a document misstates the Intel macOS packaging bound."""
+    problems: list[str] = []
+    sentences = _sentences(_flattened(text))
+    claims = [sentence for sentence in sentences if _CEILING_CLAIM.search(sentence)]
+    if not claims:
+        problems.append("the Intel macOS packaging exception is not stated at all")
+        return problems
+
+    located = [
+        sentence
+        for sentence in claims
+        if "x86_64" in sentence and ("Darwin" in sentence or "Intel macOS" in sentence)
+    ]
+    if not located:
+        problems.append("a 3.11 bound is stated without naming the Darwin x86_64 platform")
+    elif not any(
+        any(word in sentence.lower() for word in _PACKAGING_WORDS) for sentence in located
+    ):
+        problems.append("the 3.11 bound is not described as a packaging or resolution fact")
+
+    for sentence in claims:
+        lowered = sentence.lower()
+        if any(word in lowered for word in _RUNTIME_WORDS) and not any(
+            word in lowered for word in _PACKAGING_WORDS
+        ):
+            problems.append(f"the 3.11 bound is described as a runtime ceiling: {sentence[:120]}")
+    return problems
+
+
+def runtime_admission_breadth_problems(text: str) -> list[str]:
+    """Return a problem if the document stopped saying runtime admission is 3.9-or-newer."""
+    flat = _flattened(text).lower()
+    if "3.9" not in flat:
+        return ["the document no longer states the stable MuJoCo 3.9 floor"]
+    if not any(word in flat for word in ("capability-based", "capability admission", "admitted")):
+        return ["the document no longer describes runtime admission as capability-based"]
+    return []
+
+
+@pytest.mark.parametrize("name", _PACKAGING_EXCEPTION_DOCUMENTS)
+def test_every_requirements_document_states_the_intel_packaging_exception(name: str) -> None:
+    """Each document that describes the MuJoCo requirement must carry the platform exception."""
+    text = _document(name).read_text(encoding="utf-8")
+    check.equal(intel_packaging_exception_problems(text), [], name)
+    check.equal(runtime_admission_breadth_problems(text), [], name)
+
+
+@pytest.mark.parametrize("name", _PACKAGING_EXCEPTION_DOCUMENTS)
+def test_removing_the_intel_packaging_exception_is_detected(name: str) -> None:
+    """Reverting a document to an unqualified ceiling claim must fail this contract."""
+    text = _document(name).read_text(encoding="utf-8")
+    assert intel_packaging_exception_problems(text) == [], name
+    mutated = _CEILING_CLAIM.sub("", text)
+    assert mutated != text, name
+    assert intel_packaging_exception_problems(mutated), name
+
+
+@pytest.mark.parametrize("name", _PACKAGING_EXCEPTION_DOCUMENTS)
+def test_dropping_the_platform_from_the_exception_is_detected(name: str) -> None:
+    """A ceiling stated without naming Darwin x86_64 reads as a global bound."""
+    text = _document(name).read_text(encoding="utf-8")
+    mutated = text.replace("x86_64", "processors")
+    assert mutated != text, name
+    assert intel_packaging_exception_problems(mutated), name
+
+
+@pytest.mark.parametrize("name", _PACKAGING_EXCEPTION_DOCUMENTS)
+@pytest.mark.parametrize(
+    "overstatement",
+    [
+        "Runtime admission requires MuJoCo below 3.11 and refuses anything newer.",
+        "The runtime gate refuses MuJoCo at or above 3.11 on every platform.",
+        "Only MuJoCo below 3.11 is admitted.",
+    ],
+    ids=["admission", "gate", "admitted"],
+)
+def test_describing_the_exception_as_a_runtime_ceiling_is_detected(
+    name: str, overstatement: str
+) -> None:
+    """Overstating the packaging bound as a runtime rule must fail this contract.
+
+    The packaging bound exists because upstream ships no Intel macOS wheel, not because Metrifid
+    refuses newer runtimes. A document that turns it into a runtime rule tells every reader
+    something false about what the product admits.
+    """
+    text = _document(name).read_text(encoding="utf-8")
+    assert intel_packaging_exception_problems(text) == [], name
+    overstated = f"{text}\n\n{overstatement}\n"
+    problems = intel_packaging_exception_problems(overstated)
+    assert any("runtime ceiling" in problem for problem in problems), (name, problems)

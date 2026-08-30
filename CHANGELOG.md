@@ -4,6 +4,30 @@ Notable changes to `metrifid`. Starting with `0.2.0`, release identifiers use ex
 dot-separated integer components: `MAJOR.MINOR.PATCH`. Historical development entries below
 remain as an audit trail and do not define the current release version.
 
+## 0.7.1
+
+A packaging-only correction to dependency resolution on Intel macOS. No API, schema, receipt
+format, runtime-admission rule, filesystem policy, CLI surface, or product behavior changes, and
+the set of supported operations is unchanged.
+
+### Fixed
+
+- An ordinary `pip install metrifid` on Intel macOS (`Darwin`, `x86_64`) read the unconditional
+  `mujoco>=3.9` requirement, selected a MuJoCo release for which upstream publishes no Intel macOS
+  wheel, fell back to the MuJoCo source distribution, and failed because that source build requires
+  `MUJOCO_PATH`. The MuJoCo requirement is now expressed as two complementary environment-marked
+  requirements: `>=3.9,<3.11` on Darwin `x86_64`, and `>=3.9` with no ceiling everywhere else. The
+  ceiling reflects upstream Intel macOS wheel availability and still permits compatible 3.9 and 3.10
+  patch releases.
+
+### Unchanged
+
+- Runtime admission remains capability-based and architecture-neutral for coherent stable MuJoCo
+  3.9 or newer. The new bound applies to automatic dependency resolution on Darwin `x86_64` only,
+  and does not narrow which runtimes Metrifid will admit or validate against. A Python process
+  running as `x86_64` under Rosetta follows the Intel branch, because that is the architecture its
+  wheels must match.
+
 ## 0.7.0
 
 The first release since `0.2.1`. It adds four commands, replaces the exact MuJoCo version wall with

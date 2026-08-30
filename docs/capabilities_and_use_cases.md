@@ -1183,13 +1183,14 @@ The current source declares:
 
 ```text
 Python >=3.11, with no metadata upper bound
-MuJoCo Python package >=3.9, stable, with no minor-version ceiling
+MuJoCo runtime admission >=3.9, stable, capability-based, no minor-version ceiling
+MuJoCo Python package >=3.9,<3.11 on Darwin x86_64; >=3.9 with no ceiling elsewhere
 MuJoCo package/native base version and algorithmic native integer must agree
 MuJoCo exact validated profiles 3.9.0, 3.10.0, 3.11.0, and 3.12.0
 NumPy >=1.26, with no runtime upper bound
 ```
 
-Every native command uses the same capability-based runtime gate. The gate requires Linux or macOS plus the POSIX descriptor-relative filesystem capabilities used by the security model; it does not reject a machine architecture through an allowlist. Native Windows is unsupported, and WSL is the documented route.
+Every native command uses the same capability-based runtime gate. The gate requires Linux or macOS plus the POSIX descriptor-relative filesystem capabilities used by the security model; it does not reject a machine architecture through an allowlist. The Intel macOS package bound above is a dependency marker read by the installer, not a runtime check. Native Windows is unsupported, and WSL is the documented route.
 
 Stable future releases are admitted only when their measured operation capabilities pass and are
 reported as capability-compatible, not validated. Package/native mismatch, missing call-graph

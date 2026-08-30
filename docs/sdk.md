@@ -54,14 +54,17 @@ The five model operations compile a real model, and `compare`, `audit-timestep` 
 ```text
 Python language   >= 3.11, with no upper bound and no interpreter-name allowlist
 Operating system  Linux or macOS with the required POSIX descriptor capabilities
-MuJoCo package    stable >=3.9, with no minor-version ceiling
+MuJoCo runtime    stable >=3.9, capability-based, no minor-version ceiling anywhere
+MuJoCo package    >=3.9,<3.11 on Darwin x86_64; >=3.9 with no ceiling elsewhere
 MuJoCo identity   package/native base and algorithmic native integer agree
 Validated exact   3.9.0, 3.10.0, 3.11.0, and 3.12.0
 NumPy             >= 1.26, with no runtime upper bound
 ```
 
-The resolver-selected newest stable MuJoCo is the primary development and release profile—3.12.0
-for the frozen 2026-08-22 snapshot. Exact 3.9.0 is the supported minimum; retained 3.10.0 and 3.11.0
+Upstream publishes no Intel macOS wheel for MuJoCo 3.11 or newer, so the package requirement is
+bounded on Darwin `x86_64` only; runtime admission is unchanged there. Elsewhere the
+resolver-selected newest stable MuJoCo is the primary development and release profile—3.12.0 for
+the frozen 2026-08-22 snapshot. Exact 3.9.0 is the supported minimum; retained 3.10.0 and 3.11.0
 profiles remain backward-compatibility evidence. SDK results bind the exact admitted runtime bytes.
 
 Release evidence currently uses CPython because the exercised MuJoCo wheels target CPython. Other

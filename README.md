@@ -223,19 +223,25 @@ behavioral claim.
 Python 3.11 or newer, with no upper bound and no runtime rejection based on the interpreter name.
 Release evidence currently uses CPython because the MuJoCo binary wheels exercised by the release
 matrix target CPython. Other Python implementations are not claimed as validated without native
-evidence. The package dependency is `mujoco>=3.9` with no minor-version ceiling. Exact stable
-MuJoCo `3.9.0`, `3.10.0`, `3.11.0`, and `3.12.0` profiles are retained-validated. A later stable
-release is admitted only when its Python/native identities agree and the requested operation's
-measured capabilities pass; it is reported as capability-compatible, never falsely as validated.
-The newest stable release is the primary development and release profile—3.12.0 for the frozen
-2026-08-22 snapshot—while the exact retained older profiles remain backward-compatibility evidence.
-NumPy is `>=1.26`, with no runtime ceiling and no runtime version gate.
+evidence. Runtime admission requires a stable MuJoCo `3.9` or newer and is capability-based, with
+no minor-version ceiling on any platform. Package resolution carries one platform exception:
+because upstream publishes no Intel macOS wheel for MuJoCo `3.11` or newer, the dependency is
+`mujoco>=3.9,<3.11` on Darwin `x86_64` and `mujoco>=3.9` with no minor ceiling everywhere else.
+That bound is a packaging-resolution fact about upstream wheel availability, not a narrowing of
+what the runtime admits. Exact stable MuJoCo `3.9.0`, `3.10.0`, `3.11.0`, and `3.12.0` profiles are
+retained-validated. A later stable release is admitted only when its Python/native identities agree
+and the requested operation's measured capabilities pass; it is reported as capability-compatible,
+never falsely as validated. On platforms without that packaging exception the newest stable release
+is the primary development and release profile—3.12.0 for the frozen 2026-08-22 snapshot—while the
+exact retained older profiles remain backward-compatibility evidence. NumPy is `>=1.26`, with no
+runtime ceiling and no runtime version gate.
 
 Every native command — `certify`, `review-model`, `compare`, `audit-timestep`,
 and `qualify-workload` —
 passes through one shared runtime gate. That gate admits Linux and macOS when the required POSIX
 capabilities are present, and it never inspects the machine architecture: architecture is receipt
-evidence only, so there is no allowlist. Native Windows is unsupported because those capabilities
+evidence only, so there is no allowlist. The Intel macOS packaging bound above is a dependency
+marker read by the installer, not a runtime check; the gate itself remains architecture-neutral. Native Windows is unsupported because those capabilities
 are absent; WSL is the documented route. A coherent runtime can still refuse one claim: missing
 call-graph capabilities use `MUJOCO_RUNTIME_CAPABILITY_MISSING`, and an unrepresentable feature uses
 `MUJOCO_FEATURE_COVERAGE_INCOMPLETE`. In particular, `review-model` requires an exact characterized
