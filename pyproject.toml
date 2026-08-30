@@ -34,7 +34,18 @@ classifiers = [
   "Topic :: Software Development :: Testing",
   "Typing :: Typed",
 ]
-dependencies = ["mujoco>=3.9", "numpy>=1.26"]
+# Two complementary MuJoCo requirements, plus the unchanged NumPy floor. Upstream publishes
+# Darwin x86_64 wheels for MuJoCo 3.9 and 3.10 but not for 3.11 or newer, so an unconditional
+# ">=3.9" makes an ordinary Intel macOS install resolve to a source archive that cannot build
+# without MUJOCO_PATH. The ceiling is a packaging-resolution bound on that one platform only; it
+# permits compatible 3.9/3.10 patch releases and does not change runtime admission, which stays
+# capability-based for coherent stable MuJoCo 3.9 or newer on every architecture. The second
+# marker is the logical complement of the first, so exactly one applies on any environment.
+dependencies = [
+  "mujoco>=3.9,<3.11; platform_system == 'Darwin' and platform_machine == 'x86_64'",
+  "mujoco>=3.9; platform_system != 'Darwin' or platform_machine != 'x86_64'",
+  "numpy>=1.26",
+]
 
 [project.urls]
 Homepage = "https://github.com/Steady-Hand-AI/Steady-Hand-Metrifid"

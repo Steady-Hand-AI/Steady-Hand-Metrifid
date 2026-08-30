@@ -20,6 +20,7 @@ import json
 import re
 import shutil
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from types import ModuleType
 from typing import Any
@@ -32,7 +33,7 @@ _QUALITY_CONSTRAINTS = _REPOSITORY / ".github/quality-constraints.txt"
 _VALIDATOR = _REPOSITORY / ".github/scripts/validate_ci_evidence.py"
 
 # The expected digest of the frozen release workflow.
-_FROZEN_WORKFLOW_SHA256 = "80a1ddf8a68c23846ca00b3b2a6746f2d2eaa3cbd2b588eee0c6b1d8376712a2"
+_FROZEN_WORKFLOW_SHA256 = "d60779dbc059c2427def6689e83926277a5892dbd3d6c597b9e81b6bafde1130"
 
 _ALL_JOBS = (
     "build_and_quality",
@@ -328,13 +329,72 @@ def test_the_parity_rebuild_is_named_as_evidence_and_never_installed() -> None:
         assert arguments.strip() == "-c .github/quality-constraints.txt build", arguments
 
 
-def test_the_intel_mujoco_pin_is_runner_local_and_never_project_metadata() -> None:
-    """A host workaround must not become a published dependency claim."""
+def test_no_lane_reintroduces_a_runner_local_mujoco_resolver_override() -> None:
+    """The published metadata, not a runner workaround, must select an installable MuJoCo.
+
+    A constraints file, a binary-only pin or an exact MuJoCo pin around the candidate install
+    would make the Intel lane green while the published metadata stayed broken for every user.
+    That is the exact failure this release corrects, so the mechanism may not come back under
+    any spelling.
+    """
     text = _workflow_text()
-    assert "printf 'mujoco==3.10.0\\n' > \"$RUNNER_TEMP/intel-constraint.txt\"" in text
-    assert "PIP_ONLY_BINARY=mujoco" in text
-    assert "mujoco==3.10.0" not in _QUALITY_CONSTRAINTS.read_text(encoding="utf-8")
-    assert _job(text, "matrix_lane").count('intel_mujoco_pin: "true"') == 1
+    for token in (
+        "PIP_CONSTRAINT",
+        "PIP_ONLY_BINARY",
+        "intel-constraint",
+        "intel_mujoco_pin",
+        "INTEL_MUJOCO_PIN",
+        "MUJOCO_PATH",
+    ):
+        assert token not in text, token
+    assert "mujoco" not in _QUALITY_CONSTRAINTS.read_text(encoding="utf-8")
+    # The two lanes that deliberately install an exact floor or an exact retained profile are
+    # named; every other job must leave the resolver alone. The pattern matches a version pin,
+    # not any Python comparison that happens to mention MuJoCo: the required lane legitimately
+    # compares its install report against the imported ``mujoco.__version__``.
+    pin = re.compile(r"(?<![\w.])mujoco\s*==\s*[\"']?[0-9]", re.IGNORECASE)
+    for name in ("build_and_quality", "matrix_lane", "sdist_install_lane"):
+        job = _job(text, name)
+        assert pin.search(job) is None, (name, pin.search(job))
+    # Controls: the pattern must ignore the legitimate comparison and still catch a real pin.
+    assert pin.search("assert reported_mujoco == mujoco.__version__") is None
+    assert pin.search('printf "mujoco==3.10.0"') is not None
+    assert pin.search("pip install mujoco==3.9.0") is not None
+
+
+def test_the_required_intel_lane_installs_the_candidate_wheel_ordinarily() -> None:
+    """The Intel lane must prove the ordinary user install, and record pip's own resolve.
+
+    ``--no-deps`` or a preinstalled MuJoCo would skip the dependency resolution this lane exists
+    to observe, so the candidate install must carry its dependencies and emit the install report
+    the release summary binds to.
+    """
+    job = _job(_workflow_text(), "matrix_lane")
+    installs = re.findall(r"pip install ((?:[^\n]*\\\n)*[^\n]*)", job)
+    candidate = [line for line in installs if "release-artifacts/dist/*.whl" in line]
+    assert len(candidate) == 1, candidate
+    command = candidate[0]
+    assert "--report lane-evidence/install_report.json" in command, command
+    for forbidden in ("--no-deps", "--only-binary", "-c ", "--constraint", "--index-url"):
+        assert forbidden not in command, (forbidden, command)
+    # The report is written into the directory the lane uploads as its evidence.
+    assert 'pathlib.Path("lane-evidence").mkdir' in job
+
+
+def test_the_intel_lane_is_the_only_required_lane_carrying_a_packaging_ceiling() -> None:
+    """Exactly one required lane declares the Darwin x86_64 packaging bound."""
+    validator = _load_validator()
+    bounded = {
+        lane: want.mujoco_wheel_ceiling
+        for lane, want in validator.LANE_EXPECTATIONS.items()
+        if want.mujoco_wheel_ceiling is not None
+    }
+    assert bounded == {"macos_x64_py312": (3, 11)}
+    want = validator.LANE_EXPECTATIONS["macos_x64_py312"]
+    assert (want.platform_system, want.platform_machine) == ("Darwin", "x86_64")
+    # The bound must not be expressed as a frozen exact version: that would stop the lane from
+    # observing which release the resolver actually selects.
+    assert want.mujoco_version is None
 
 
 def test_runner_architecture_is_measured_rather_than_assumed() -> None:
@@ -705,6 +765,12 @@ def test_the_build_authority_publishes_one_original_manifest() -> None:
 
 _EVENT_SHA = "1" * 40
 _HEAD_SHA = "2" * 40
+# The synthetic candidate is a real wheel name carrying the real release version, because the
+# summary now binds the install report to the accepted artifact by file name and by the version
+# that file name encodes. A placeholder could not exercise either check.
+_CANDIDATE_VERSION = "0.7.1"
+_CANDIDATE_WHEEL = f"metrifid-{_CANDIDATE_VERSION}-py3-none-any.whl"
+_CANDIDATE_SDIST = f"metrifid-{_CANDIDATE_VERSION}.tar.gz"
 _DIGEST = "a" * 64
 _SDIST_DIGEST = "b" * 64
 _HELP = "\n".join(f"### metrifid {command} --help" for command in _PUBLIC_COMMANDS)
@@ -754,9 +820,63 @@ def _native_integer(version: str) -> int:
     return major * 1_000_000 + minor * 1_000 + patch
 
 
+def _resolver_version(want: Any) -> str:
+    """The MuJoCo release a resolver lane would land on, derived from the lane's own bound.
+
+    A lane with a packaging ceiling must synthesize a release below it; deriving the value from
+    the ceiling keeps the fixture correct if the ceiling ever moves, where a literal would not.
+    """
+    ceiling = want.mujoco_wheel_ceiling
+    if ceiling is None:
+        return "3.11.0"
+    return f"{ceiling[0]}.{ceiling[1] - 1}.0"
+
+
+def _install_report(want: Any, *, mujoco_version: str | None = None) -> dict[str, Any]:
+    """Build a pip install report that matches the lane it claims to describe."""
+    version = mujoco_version or _resolver_version(want)
+    return {
+        "version": "1",
+        "pip_version": "26.2.1",
+        "environment": {
+            "platform_system": want.platform_system,
+            "platform_machine": want.platform_machine,
+            "python_version": want.python_major_minor,
+        },
+        "install": [
+            {
+                "is_direct": True,
+                "requested": True,
+                "download_info": {
+                    "url": f"file:///release-artifacts/dist/{_CANDIDATE_WHEEL}",
+                    "archive_info": {"hashes": {"sha256": _DIGEST}},
+                },
+                "metadata": {"name": "metrifid", "version": _CANDIDATE_VERSION},
+            },
+            {
+                "is_direct": False,
+                "requested": False,
+                "download_info": {
+                    "url": (
+                        f"https://files.pythonhosted.org/packages/mujoco-{version}"
+                        f"-cp312-cp312-macosx_10_16_x86_64.whl"
+                    )
+                },
+                "metadata": {"name": "mujoco", "version": version},
+            },
+            {
+                "is_direct": False,
+                "requested": False,
+                "download_info": {"url": "https://files.pythonhosted.org/packages/numpy-2.3.5.whl"},
+                "metadata": {"name": "numpy", "version": "2.3.5"},
+            },
+        ],
+    }
+
+
 def _identity(want: Any) -> dict[str, Any]:
     """Build a runtime identity document that actually matches its lane's expectation."""
-    mujoco_version = want.mujoco_version or "3.11.0"
+    mujoco_version = want.mujoco_version or _resolver_version(want)
     return {
         "package_version": mujoco_version,
         "package_base_version": mujoco_version,
@@ -795,8 +915,8 @@ def _build_green_tree(root: Path) -> None:
     _write(
         original / "original_manifest.json",
         {
-            "wheel": {"filename": "m-0.whl", "size_bytes": 10, "sha256": _DIGEST},
-            "sdist": {"filename": "m-0.tar.gz", "size_bytes": 10, "sha256": _SDIST_DIGEST},
+            "wheel": {"filename": _CANDIDATE_WHEEL, "size_bytes": 10, "sha256": _DIGEST},
+            "sdist": {"filename": _CANDIDATE_SDIST, "size_bytes": 10, "sha256": _SDIST_DIGEST},
         },
     )
     _write(
@@ -821,6 +941,8 @@ def _build_green_tree(root: Path) -> None:
         _write(directory / "tier.txt", want.tier + "\n")
         _write(directory / "installed_artifact.json", {"kind": "wheel", "sha256": _DIGEST})
         _write(directory / "runtime_identity.json", _identity(want))
+        if want.mujoco_wheel_ceiling is not None:
+            _write(directory / "install_report.json", _install_report(want))
         _write(directory / "cli_help.log", _HELP)
         if want.tier == "full":
             _write(directory / "full.xml", _junit(_FULL_CASES))
@@ -995,6 +1117,280 @@ def test_the_helper_rejects_an_identity_that_is_not_its_declared_lane(
     identity = _identity(validator.LANE_EXPECTATIONS[lane])
     identity[field_name] = wrong
     _write(green_tree / f"lane-{lane}" / "runtime_identity.json", identity)
+    with pytest.raises(validator.EvidenceError):
+        _validate(validator, green_tree)
+
+
+def test_the_helper_accepts_the_intel_lane_install_report(
+    validator: ModuleType, green_tree: Path
+) -> None:
+    """The green tree already ships a well-formed report; it must be accepted as evidence."""
+    _validate(validator, green_tree)
+    report = json.loads(
+        (green_tree / "lane-macos_x64_py312" / "install_report.json").read_text(encoding="utf-8")
+    )
+    mujoco = next(e for e in report["install"] if e["metadata"]["name"] == "mujoco")
+    assert mujoco["download_info"]["url"].endswith(".whl")
+    assert mujoco["metadata"]["version"] == "3.10.0"
+
+
+def test_the_helper_rejects_a_missing_intel_install_report(
+    validator: ModuleType, green_tree: Path
+) -> None:
+    """Evidence that was never produced cannot stand in for the resolve it claims to describe."""
+    (green_tree / "lane-macos_x64_py312" / "install_report.json").unlink()
+    with pytest.raises(validator.EvidenceError):
+        _validate(validator, green_tree)
+
+
+@pytest.mark.parametrize(
+    ("mutation", "reason"),
+    [
+        ({"version": "2"}, "an unknown report schema version"),
+        ({"version": None}, "a missing report schema version"),
+        ({"environment": {}}, "an environment with no platform association"),
+        ({"install": []}, "an empty install list"),
+        ({"install": None}, "a missing install list"),
+    ],
+    ids=["schema-version", "no-schema-version", "empty-environment", "no-installs", "no-list"],
+)
+def test_the_helper_rejects_malformed_intel_install_evidence(
+    validator: ModuleType, green_tree: Path, mutation: dict[str, Any], reason: str
+) -> None:
+    """A report that is present but not well formed proves nothing about the resolve."""
+    want = validator.LANE_EXPECTATIONS["macos_x64_py312"]
+    report = _install_report(want)
+    report.update(mutation)
+    _write(green_tree / "lane-macos_x64_py312" / "install_report.json", report)
+    with pytest.raises(validator.EvidenceError):
+        _validate(validator, green_tree)
+
+
+def test_the_helper_rejects_a_mujoco_source_archive_in_the_intel_report(
+    validator: ModuleType, green_tree: Path
+) -> None:
+    """A source archive is the exact defect the platform bound exists to prevent."""
+    want = validator.LANE_EXPECTATIONS["macos_x64_py312"]
+    report = _install_report(want)
+    entry = next(e for e in report["install"] if e["metadata"]["name"] == "mujoco")
+    version = entry["metadata"]["version"]
+    entry["download_info"]["url"] = (
+        f"https://files.pythonhosted.org/packages/mujoco-{version}.tar.gz"
+    )
+    _write(green_tree / "lane-macos_x64_py312" / "install_report.json", report)
+    with pytest.raises(validator.EvidenceError):
+        _validate(validator, green_tree)
+
+
+@pytest.mark.parametrize("version", ["3.11.0", "3.12.0", "4.0.0"])
+def test_the_helper_rejects_a_mujoco_at_or_above_the_intel_ceiling(
+    validator: ModuleType, green_tree: Path, version: str
+) -> None:
+    """Upstream publishes no Intel macOS wheel at or above the ceiling."""
+    want = validator.LANE_EXPECTATIONS["macos_x64_py312"]
+    _write(
+        green_tree / "lane-macos_x64_py312" / "install_report.json",
+        _install_report(want, mujoco_version=version),
+    )
+    with pytest.raises(validator.EvidenceError):
+        _validate(validator, green_tree)
+
+
+def test_the_helper_rejects_a_mujoco_below_the_project_floor_in_the_intel_report(
+    validator: ModuleType, green_tree: Path
+) -> None:
+    """The ceiling does not license dropping under the declared floor."""
+    want = validator.LANE_EXPECTATIONS["macos_x64_py312"]
+    _write(
+        green_tree / "lane-macos_x64_py312" / "install_report.json",
+        _install_report(want, mujoco_version="3.8.0"),
+    )
+    with pytest.raises(validator.EvidenceError):
+        _validate(validator, green_tree)
+
+
+@pytest.mark.parametrize(
+    ("field_name", "wrong"),
+    [("platform_system", "Linux"), ("platform_machine", "arm64")],
+)
+def test_the_helper_rejects_an_intel_report_from_another_platform(
+    validator: ModuleType, green_tree: Path, field_name: str, wrong: str
+) -> None:
+    """A resolve performed somewhere else does not prove the Intel macOS boundary."""
+    want = validator.LANE_EXPECTATIONS["macos_x64_py312"]
+    report = _install_report(want)
+    report["environment"][field_name] = wrong
+    _write(green_tree / "lane-macos_x64_py312" / "install_report.json", report)
+    with pytest.raises(validator.EvidenceError):
+        _validate(validator, green_tree)
+
+
+def test_the_helper_rejects_an_intel_report_that_skipped_dependency_resolution(
+    validator: ModuleType, green_tree: Path
+) -> None:
+    """A --no-deps install records only the requested wheel and resolves nothing."""
+    want = validator.LANE_EXPECTATIONS["macos_x64_py312"]
+    report = _install_report(want)
+    report["install"] = [e for e in report["install"] if e["metadata"]["name"] == "metrifid"]
+    _write(green_tree / "lane-macos_x64_py312" / "install_report.json", report)
+    with pytest.raises(validator.EvidenceError):
+        _validate(validator, green_tree)
+
+
+@pytest.mark.parametrize("field_name", ["is_direct", "requested"])
+def test_the_helper_rejects_an_intel_report_whose_candidate_was_not_directly_installed(
+    validator: ModuleType, green_tree: Path, field_name: str
+) -> None:
+    """The evidence must come from installing the candidate wheel itself."""
+    want = validator.LANE_EXPECTATIONS["macos_x64_py312"]
+    report = _install_report(want)
+    entry = next(e for e in report["install"] if e["metadata"]["name"] == "metrifid")
+    entry[field_name] = False
+    _write(green_tree / "lane-macos_x64_py312" / "install_report.json", report)
+    with pytest.raises(validator.EvidenceError):
+        _validate(validator, green_tree)
+
+
+def test_the_helper_rejects_an_intel_report_whose_candidate_was_built_from_source(
+    validator: ModuleType, green_tree: Path
+) -> None:
+    """An artifact that is not the ordinary wheel installation is not this lane's evidence."""
+    want = validator.LANE_EXPECTATIONS["macos_x64_py312"]
+    report = _install_report(want)
+    entry = next(e for e in report["install"] if e["metadata"]["name"] == "metrifid")
+    entry["download_info"]["url"] = f"file:///release-artifacts/dist/{_CANDIDATE_SDIST}"
+    _write(green_tree / "lane-macos_x64_py312" / "install_report.json", report)
+    with pytest.raises(validator.EvidenceError):
+        _validate(validator, green_tree)
+
+
+def test_the_helper_rejects_a_within_range_report_runtime_mismatch(
+    validator: ModuleType, green_tree: Path
+) -> None:
+    """Two MuJoCo releases can each satisfy the bound and still not be one installation.
+
+    A report naming 3.9.0 while the lane imported 3.10.0 passes every range check yet describes a
+    different installation from the one the lane measured. Range agreement is not identity.
+    """
+    want = validator.LANE_EXPECTATIONS["macos_x64_py312"]
+    identity = json.loads(
+        (green_tree / "lane-macos_x64_py312" / "runtime_identity.json").read_text(encoding="utf-8")
+    )
+    assert identity["package_version"] == "3.10.0"
+    _write(
+        green_tree / "lane-macos_x64_py312" / "install_report.json",
+        _install_report(want, mujoco_version="3.9.0"),
+    )
+    with pytest.raises(validator.EvidenceError):
+        _validate(validator, green_tree)
+
+
+def test_the_helper_accepts_a_report_that_names_the_imported_runtime(
+    validator: ModuleType, green_tree: Path
+) -> None:
+    """The control for the test above: agreement on the same in-range release is accepted."""
+    want = validator.LANE_EXPECTATIONS["macos_x64_py312"]
+    identity = _identity(want)
+    identity["package_version"] = "3.9.0"
+    identity["package_base_version"] = "3.9.0"
+    identity["native_version_string"] = "3.9.0"
+    identity["native_version_integer"] = _native_integer("3.9.0")
+    _write(green_tree / "lane-macos_x64_py312" / "runtime_identity.json", identity)
+    _write(
+        green_tree / "lane-macos_x64_py312" / "install_report.json",
+        _install_report(want, mujoco_version="3.9.0"),
+    )
+    assert _validate(validator, green_tree)["original_wheel_sha256"] == _DIGEST
+
+
+def _candidate_entry(report: dict[str, Any]) -> dict[str, Any]:
+    """The install-report entry for the directly requested candidate wheel."""
+    entry = next(e for e in report["install"] if e["metadata"]["name"] == "metrifid")
+    assert isinstance(entry, dict)
+    return entry
+
+
+def test_the_helper_rejects_a_different_candidate_wheel_filename(
+    validator: ModuleType, green_tree: Path
+) -> None:
+    """The report must name the accepted candidate, not some other wheel."""
+    want = validator.LANE_EXPECTATIONS["macos_x64_py312"]
+    report = _install_report(want)
+    _candidate_entry(report)["download_info"]["url"] = (
+        "https://example.invalid/packages/metrifid-0.7.1-py3-none-manylinux1_x86_64.whl"
+    )
+    _write(green_tree / "lane-macos_x64_py312" / "install_report.json", report)
+    with pytest.raises(validator.EvidenceError):
+        _validate(validator, green_tree)
+
+
+def test_the_helper_rejects_a_percent_encoded_lookalike_candidate(
+    validator: ModuleType, green_tree: Path
+) -> None:
+    """The basename is parsed and decoded, so an encoded path cannot forge the accepted name."""
+    want = validator.LANE_EXPECTATIONS["macos_x64_py312"]
+    report = _install_report(want)
+    _candidate_entry(report)["download_info"]["url"] = (
+        f"https://example.invalid/{_CANDIDATE_WHEEL}/other-1.0-py3-none-any.whl"
+    )
+    _write(green_tree / "lane-macos_x64_py312" / "install_report.json", report)
+    with pytest.raises(validator.EvidenceError):
+        _validate(validator, green_tree)
+
+
+@pytest.mark.parametrize("version", ["9.9.9", "0.7.0", "0.7.1.dev0"])
+def test_the_helper_rejects_a_candidate_metadata_version_the_filename_does_not_encode(
+    validator: ModuleType, green_tree: Path, version: str
+) -> None:
+    """The reported version must be the one the accepted wheel filename encodes."""
+    want = validator.LANE_EXPECTATIONS["macos_x64_py312"]
+    report = _install_report(want)
+    _candidate_entry(report)["metadata"]["version"] = version
+    _write(green_tree / "lane-macos_x64_py312" / "install_report.json", report)
+    with pytest.raises(validator.EvidenceError):
+        _validate(validator, green_tree)
+
+
+@pytest.mark.parametrize(
+    ("mutate", "reason"),
+    [
+        (lambda entry: entry["download_info"].pop("archive_info"), "no archive_info at all"),
+        (lambda entry: entry["download_info"].__setitem__("archive_info", {}), "no hashes"),
+        (
+            lambda entry: entry["download_info"]["archive_info"].__setitem__("hashes", {}),
+            "no sha256",
+        ),
+        (
+            lambda entry: entry["download_info"]["archive_info"]["hashes"].__setitem__(
+                "sha256", "c" * 64
+            ),
+            "an unrelated sha256",
+        ),
+    ],
+    ids=["missing-archive", "missing-hashes", "missing-sha256", "wrong-sha256"],
+)
+def test_the_helper_rejects_a_candidate_archive_digest_that_is_not_the_accepted_one(
+    validator: ModuleType, green_tree: Path, mutate: Callable[[dict[str, Any]], object], reason: str
+) -> None:
+    """The candidate archive digest must equal the accepted original wheel digest."""
+    want = validator.LANE_EXPECTATIONS["macos_x64_py312"]
+    report = _install_report(want)
+    mutate(_candidate_entry(report))
+    _write(green_tree / "lane-macos_x64_py312" / "install_report.json", report)
+    with pytest.raises(validator.EvidenceError):
+        _validate(validator, green_tree)
+
+
+def test_the_helper_rejects_a_second_directly_requested_distribution(
+    validator: ModuleType, green_tree: Path
+) -> None:
+    """Exactly one entry may be the directly requested candidate wheel."""
+    want = validator.LANE_EXPECTATIONS["macos_x64_py312"]
+    report = _install_report(want)
+    extra = next(e for e in report["install"] if e["metadata"]["name"] == "numpy")
+    extra["is_direct"] = True
+    extra["requested"] = True
+    _write(green_tree / "lane-macos_x64_py312" / "install_report.json", report)
     with pytest.raises(validator.EvidenceError):
         _validate(validator, green_tree)
 
