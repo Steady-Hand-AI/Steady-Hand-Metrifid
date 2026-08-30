@@ -962,8 +962,13 @@ jobs:
 
           # One deterministic product journey through the installed console script: two source
           # spellings that compile to one artifact must certify, and the receipt must be published.
-          baseline = pathlib.Path("baseline.xml")
-          candidate = pathlib.Path("candidate.xml")
+          # The inputs live under their own model directory and the receipt is published to a
+          # disjoint sibling, because Metrifid refuses an output inside a declared model root.
+          models = pathlib.Path("models")
+          models.mkdir()
+          receipt = pathlib.Path("receipt")
+          baseline = models / "baseline.xml"
+          candidate = models / "candidate.xml"
           baseline.write_text(
               '<mujoco model="journey">\n'
               "  <worldbody>\n"
@@ -987,13 +992,15 @@ jobs:
               encoding="utf-8",
           )
           done = subprocess.run(
-              ["metrifid", "certify", str(baseline), str(candidate), "--output", "receipt"],
+              ["metrifid", "certify", str(baseline), str(candidate), "--output", str(receipt)],
               capture_output=True,
               text=True,
           )
           if done.returncode != 0:
               raise SystemExit(f"certify journey exited {done.returncode}: {done.stderr}")
-          published = sorted(path.name for path in pathlib.Path("receipt").rglob("*") if path.is_file())
+          if receipt.resolve().is_relative_to(models.resolve()):
+              raise SystemExit("the receipt directory must stay outside the model root")
+          published = sorted(path.name for path in receipt.rglob("*") if path.is_file())
           if not published:
               raise SystemExit("certify journey published no receipt")
           print(f"certify journey published {len(published)} receipt files")
@@ -1342,8 +1349,13 @@ jobs:
           import pathlib
           import subprocess
 
-          baseline = pathlib.Path("baseline.xml")
-          candidate = pathlib.Path("candidate.xml")
+          # The inputs live under their own model directory and the receipt is published to a
+          # disjoint sibling, because Metrifid refuses an output inside a declared model root.
+          models = pathlib.Path("models")
+          models.mkdir()
+          receipt = pathlib.Path("receipt")
+          baseline = models / "baseline.xml"
+          candidate = models / "candidate.xml"
           baseline.write_text(
               '<mujoco model="journey">\n'
               "  <worldbody>\n"
@@ -1367,13 +1379,15 @@ jobs:
               encoding="utf-8",
           )
           done = subprocess.run(
-              ["metrifid", "certify", str(baseline), str(candidate), "--output", "receipt"],
+              ["metrifid", "certify", str(baseline), str(candidate), "--output", str(receipt)],
               capture_output=True,
               text=True,
           )
           if done.returncode != 0:
               raise SystemExit(f"certify journey exited {done.returncode}: {done.stderr}")
-          published = sorted(path.name for path in pathlib.Path("receipt").rglob("*") if path.is_file())
+          if receipt.resolve().is_relative_to(models.resolve()):
+              raise SystemExit("the receipt directory must stay outside the model root")
+          published = sorted(path.name for path in receipt.rglob("*") if path.is_file())
           if not published:
               raise SystemExit("certify journey published no receipt")
           print(f"certify journey published {len(published)} receipt files")
