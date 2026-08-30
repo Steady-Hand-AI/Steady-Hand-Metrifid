@@ -2866,3 +2866,103 @@ def test_the_native_mujoco_comparisons_are_live_inequalities(jobs: dict[str, Any
         if isinstance(node, ast.Constant) and isinstance(node.value, int)
     }
     assert {1_000_000, 1_000} <= constants, sorted(constants)
+
+
+# ---- Registry-verification journeys keep their output outside the model root ------------------------
+#
+# Metrifid refuses an output directory inside a declared model root with
+# OUTPUT_PATH_INVALID / output_inside_model_root, and exits 64. A verification journey that writes
+# its models and its receipt into one directory therefore cannot pass, and that refusal is the
+# product behaving correctly. Both registry-verification jobs embed their own copy of the journey,
+# so each copy is executed here rather than read, with the console script replaced by a fake that
+# inspects the argument vector the journey actually builds.
+
+JOURNEY_STEPS = {
+    "testpypi_verify": "Install the downloaded wheel and run the public journeys",
+    "pypi_verify": "Install the public wheel and run the public journeys",
+}
+
+# Stands in for the installed console script. It fails the journey unless the invocation really is
+# `metrifid certify`, the two input arguments name files the journey created, and the output
+# argument resolves outside the parent directory of each input. Only then does it publish a receipt,
+# so the journey's own nonempty-receipt assertion still has to run.
+JOURNEY_FAKE = """
+import json as _json
+import pathlib as _pathlib
+import subprocess as _subprocess
+import types as _types
+
+_LOG = _pathlib.Path(os.environ["JOURNEY_ARGV_LOG"])
+
+
+def _fake_run(argv, *args, **kwargs):
+    _LOG.write_text(_json.dumps(list(argv)) + "\\n", encoding="utf-8")
+    if list(argv[:2]) != ["metrifid", "certify"]:
+        raise SystemExit(f"journey did not invoke `metrifid certify`: {list(argv)}")
+    if "--output" not in argv:
+        raise SystemExit(f"journey passed no --output: {list(argv)}")
+    marker = argv.index("--output")
+    inputs = [_pathlib.Path(value) for value in argv[2:marker]]
+    if len(inputs) != 2:
+        raise SystemExit(f"journey passed {len(inputs)} model arguments, expected 2: {list(argv)}")
+    for value in inputs:
+        if not value.is_file():
+            raise SystemExit(f"journey passed a model argument that is not a file: {value}")
+    output = _pathlib.Path(argv[marker + 1]).resolve()
+    for value in inputs:
+        root = value.resolve().parent
+        if output == root or root in output.parents:
+            raise SystemExit(
+                f"the certify output {output} is inside the model root {root}; Metrifid refuses "
+                "this with OUTPUT_PATH_INVALID / output_inside_model_root and exits 64"
+            )
+    output.mkdir(parents=True, exist_ok=True)
+    (output / "certification.json").write_text("{}", encoding="utf-8")
+    return _types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+
+_subprocess.run = _fake_run
+"""
+
+
+def _run_journey(job: dict[str, Any], step_name: str, workdir: Path, *, source: str | None = None):
+    """Execute one embedded journey against the fake console script."""
+    log = workdir.parent / f"{workdir.name}-argv.json"
+    completed = _run_validator(
+        _inline_python(job, step_name) if source is None else source,
+        workdir,
+        {"JOURNEY_ARGV_LOG": str(log)},
+        prelude=JOURNEY_FAKE,
+    )
+    return completed, log
+
+
+@pytest.mark.parametrize("job_id", REGISTRY_VERIFY_JOBS)
+def test_the_registry_journey_publishes_outside_the_model_root(
+    jobs: dict[str, Any], job_id: str, tmp_path: Path
+) -> None:
+    """Each shipped journey runs, and the receipt it asks for lands outside both input roots."""
+    workdir = tmp_path / "journey"
+    workdir.mkdir()
+    completed, log = _run_journey(jobs[job_id], JOURNEY_STEPS[job_id], workdir)
+    assert completed.returncode == 0, completed.stderr
+    assert "certify journey published" in completed.stdout, completed.stdout
+    argv = json.loads(log.read_text(encoding="utf-8"))
+    assert argv[:2] == ["metrifid", "certify"], argv
+
+
+@pytest.mark.parametrize("job_id", REGISTRY_VERIFY_JOBS)
+def test_moving_the_registry_journey_output_back_inside_the_model_root_fails(
+    jobs: dict[str, Any], job_id: str, tmp_path: Path
+) -> None:
+    """The regression this contract exists for: the pre-correction shape must not pass."""
+    source = _inline_python(jobs[job_id], JOURNEY_STEPS[job_id])
+    reverted = source.replace(
+        'receipt = pathlib.Path("receipt")', 'receipt = models / "receipt"', 1
+    )
+    assert reverted != source, "the mutation must actually change the journey"
+    workdir = tmp_path / "reverted"
+    workdir.mkdir()
+    completed, _ = _run_journey(jobs[job_id], JOURNEY_STEPS[job_id], workdir, source=reverted)
+    assert completed.returncode != 0
+    assert "output_inside_model_root" in completed.stderr, completed.stderr
