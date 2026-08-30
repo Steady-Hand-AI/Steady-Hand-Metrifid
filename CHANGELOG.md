@@ -4,7 +4,7 @@ Notable changes to `metrifid`. Starting with `0.2.0`, release identifiers use ex
 dot-separated integer components: `MAJOR.MINOR.PATCH`. Historical development entries below
 remain as an audit trail and do not define the current release version.
 
-## 0.7.0 — 2026-08-29
+## 0.7.0
 
 The first release since `0.2.1`. It adds four commands, replaces the exact MuJoCo version wall with
 rolling runtime admission, and rebuilds the evidence boundaries so a published receipt can be
