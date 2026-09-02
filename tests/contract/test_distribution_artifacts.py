@@ -40,6 +40,8 @@ _REQUIRED_SDIST_MEMBERS = (
     "tools/native_upgrade_profile_worker.py",
 )
 _COMPARED_METADATA_FIELDS = ("Name", "Version", "Summary", "Requires-Python")
+# Excluded from the source distribution: it reads repository-root inputs that are not packaged.
+_EXCLUDED_SDIST_TEST = "tests/contract/test_ci_quality_environment.py"
 # The supported platform classes the project publishes for. Exactly one of them resolves MuJoCo
 # under a ceiling, because upstream publishes no Darwin x86_64 wheel at or above 3.11.
 _SUPPORTED_PLATFORMS = {
@@ -176,6 +178,22 @@ def test_sdist_contains_every_documented_repository_path(distributions: dict[str
     assert missing == [], missing
     for prefix in ("src/", "tests/", "docs/", "examples/"):
         assert any(name.startswith(prefix) for name in names), prefix
+
+
+def test_the_repository_only_contract_is_not_shipped(distributions: dict[str, Path]) -> None:
+    """Every test the archive ships must be runnable from the archive.
+
+    `tests/contract/test_ci_quality_environment.py` reads repository-root files that are
+    deliberately not packaged, so it could never run from an extracted source distribution. It is
+    excluded, while the ordinary test tree still ships.
+    """
+    with tarfile.open(distributions["sdist"]) as archive:
+        names = {n.split("/", 1)[1] for n in archive.getnames() if "/" in n}
+    assert _EXCLUDED_SDIST_TEST not in names, _EXCLUDED_SDIST_TEST
+    shipped = {name for name in names if name.startswith("tests/") and name.endswith(".py")}
+    assert len(shipped) > 1, shipped
+    for companion in ("tests/contract/test_distribution_artifacts.py", "tests/conftest.py"):
+        assert companion in names, companion
 
 
 def test_direct_wheel_package_bytes_match_the_candidate_source(

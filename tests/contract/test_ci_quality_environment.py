@@ -17,8 +17,10 @@ import functools
 import hashlib
 import importlib.util
 import json
+import os
 import re
 import shutil
+import subprocess
 import sys
 from collections.abc import Callable
 from pathlib import Path
@@ -31,9 +33,10 @@ _REPOSITORY = Path(__file__).resolve().parents[2]
 _WORKFLOW = _REPOSITORY / ".github/workflows/ci.yml"
 _QUALITY_CONSTRAINTS = _REPOSITORY / ".github/quality-constraints.txt"
 _VALIDATOR = _REPOSITORY / ".github/scripts/validate_ci_evidence.py"
+_ACTION = _REPOSITORY / "action.yml"
 
 # The expected digest of the frozen release workflow.
-_FROZEN_WORKFLOW_SHA256 = "d60779dbc059c2427def6689e83926277a5892dbd3d6c597b9e81b6bafde1130"
+_FROZEN_WORKFLOW_SHA256 = "3b7fc25e9554010fcbc1a467135bb43ec6796de50abd0eb4ace1e76b5058eb48"
 
 _ALL_JOBS = (
     "build_and_quality",
@@ -204,6 +207,33 @@ def test_the_shipped_workflow_matches_the_frozen_bytes() -> None:
                 1,
             ),
             id="inactive_head_comparison",
+        ),
+        pytest.param(
+            "commented_output_assertion",
+            lambda t: t.replace(
+                '          if [ "${{ steps.test_64.outputs.status }}" != "refused" ]; then exit 1; fi',
+                '          # if [ "${{ steps.test_64.outputs.status }}" != "refused" ]; then exit 1; fi',
+                1,
+            ),
+            id="commented_output_assertion",
+        ),
+        pytest.param(
+            "noop_output_assertion",
+            lambda t: t.replace(
+                '"${{ steps.test_64.outputs.status }}" != "refused" ]; then exit 1; fi',
+                '"${{ steps.test_64.outputs.status }}" != "refused" ]; then :; fi',
+                1,
+            ),
+            id="noop_output_assertion",
+        ),
+        pytest.param(
+            "canary_propagation_removed",
+            lambda t: t.replace(
+                '          echo "BASH_ENV=$RUNNER_TEMP/metrifid_canary.sh" >> "$GITHUB_ENV"\n',
+                "",
+                1,
+            ),
+            id="canary_propagation_removed",
         ),
         pytest.param(
             "rebound_receipt_value",
@@ -500,7 +530,7 @@ def test_no_blocking_step_swallows_its_own_failure() -> None:
     tolerated = {
         "expanded_full_diagnostics": 1,
         "release_matrix_summary": 4,
-        "test_composite_action": 3,
+        "test_composite_action": 4,
     }
     total = 0
     for name, expected in tolerated.items():
@@ -516,9 +546,115 @@ def test_every_tolerated_failure_in_the_action_test_is_actually_asserted() -> No
     provoked = re.findall(
         r"id: (test_\w+)\n        uses: \./\n        continue-on-error: true", job
     )
-    assert len(provoked) == 3, provoked
+    assert len(provoked) == 4, provoked
     for step in provoked:
         assert f'steps.{step}.outcome }}}}" != "failure"' in job, step
+
+
+# ---- The reviewed release surfaces are locked by their bytes ----------------------------------
+#
+# `action.yml` and the CI workflow are held by exact SHA-256, not interpreted. This file neither
+# parses GitHub Actions YAML nor evaluates Bash: that would approximate two evaluators, and an
+# approximation is where a weakened step hides. Changing either surface requires a digest update,
+# review of the new bytes, and a hosted CI run; what the action does when it runs is proved by the
+# `test_composite_action` job on GitHub.
+
+_FROZEN_ACTION_SHA256 = "320d95a07c8c25244031efa1ff3caf138d9e4872eb01f00b923b4937b29528c2"
+
+_ADVERSARIAL_STRICT = '$(touch "$RUNNER_TEMP/metrifid-strict-expanded")'
+
+
+class FrozenActionError(AssertionError):
+    """The shipped composite action does not match the frozen bytes."""
+
+
+def _action_bytes() -> bytes:
+    """Return the shipped composite action exactly as it is stored."""
+    assert _ACTION.is_file(), f"missing action: {_ACTION}"
+    return _ACTION.read_bytes()
+
+
+def check_frozen_action(action: bytes) -> str:
+    """Require the action to match the frozen bytes, and return its digest."""
+    observed = hashlib.sha256(action).hexdigest()
+    if observed != _FROZEN_ACTION_SHA256:
+        raise FrozenActionError(
+            f"the composite action does not match the frozen bytes: expected "
+            f"{_FROZEN_ACTION_SHA256}, observed {observed}"
+        )
+    return observed
+
+
+def test_the_shipped_action_matches_the_frozen_bytes() -> None:
+    """The reviewed action is the one that ships."""
+    assert check_frozen_action(_action_bytes()) == _FROZEN_ACTION_SHA256
+
+
+@pytest.mark.parametrize(
+    ("name", "mutate"),
+    [
+        pytest.param(
+            "direct_interpolation",
+            lambda t: t.replace('if [ "$STRICT" !=', 'if [ "${{ inputs.strict }}" !=', 1),
+            id="direct_interpolation",
+        ),
+        pytest.param(
+            "weakened_strict_guard",
+            lambda t: t.replace(
+                'if [ "$STRICT" != "true" ] && [ "$STRICT" != "false" ]; then',
+                'if [ "$STRICT" = "nonsense" ]; then',
+                1,
+            ),
+            id="weakened_strict_guard",
+        ),
+    ],
+)
+def test_any_action_byte_change_fails_the_freeze(name: str, mutate: Any) -> None:
+    """Reviewed bytes changed. The diagnosis is the digest, not a reading of the change."""
+    original = _action_bytes().decode("utf-8")
+    mutated = mutate(original)
+    assert mutated != original, name
+    with pytest.raises(FrozenActionError) as raised:
+        check_frozen_action(mutated.encode("utf-8"))
+    assert _FROZEN_ACTION_SHA256 in str(raised.value)
+    assert "observed" in str(raised.value)
+
+
+# The only behavioural claim here; both controls run their own temporary scripts.
+
+
+def test_the_adversarial_payload_executes_under_direct_interpolation(tmp_path: Path) -> None:
+    """The fixture only means anything if the historical vulnerable form would really run it.
+
+    A payload that failed to parse would leave the sentinel absent for the wrong reason.
+    """
+    sentinel = tmp_path / "metrifid-strict-expanded"
+    program = tmp_path / "vulnerable.sh"
+    program.write_text(f'STRICT="{_ADVERSARIAL_STRICT}"\n', encoding="utf-8")
+    environment = {**os.environ, "RUNNER_TEMP": str(tmp_path)}
+    parsed = subprocess.run(["bash", "-n", str(program)], capture_output=True, text=True)
+    assert parsed.returncode == 0, parsed.stderr
+    ran = subprocess.run(
+        ["bash", str(program)], capture_output=True, text=True, cwd=tmp_path, env=environment
+    )
+    assert ran.returncode == 0, ran.stderr
+    assert sentinel.exists(), "the payload must execute under direct interpolation"
+
+
+def test_the_adversarial_payload_is_inert_through_the_env_guard(tmp_path: Path) -> None:
+    """The same payload, handled the way the action handles it, expands nothing."""
+    sentinel = tmp_path / "metrifid-strict-expanded"
+    program = tmp_path / "guard.sh"
+    program.write_text(
+        'if [ "$STRICT" != "true" ] && [ "$STRICT" != "false" ]; then\n  exit 1\nfi\n',
+        encoding="utf-8",
+    )
+    environment = {**os.environ, "RUNNER_TEMP": str(tmp_path), "STRICT": _ADVERSARIAL_STRICT}
+    ran = subprocess.run(
+        ["bash", str(program)], capture_output=True, text=True, cwd=tmp_path, env=environment
+    )
+    assert ran.returncode == 1, "the value must be refused"
+    assert not sentinel.exists(), "the value must not be expanded"
 
 
 def test_multiline_shell_fails_fast_and_on_pipe_failure() -> None:
@@ -768,7 +904,7 @@ _HEAD_SHA = "2" * 40
 # The synthetic candidate is a real wheel name carrying the real release version, because the
 # summary now binds the install report to the accepted artifact by file name and by the version
 # that file name encodes. A placeholder could not exercise either check.
-_CANDIDATE_VERSION = "0.7.1"
+_CANDIDATE_VERSION = "0.7.2"
 _CANDIDATE_WHEEL = f"metrifid-{_CANDIDATE_VERSION}-py3-none-any.whl"
 _CANDIDATE_SDIST = f"metrifid-{_CANDIDATE_VERSION}.tar.gz"
 _DIGEST = "a" * 64
@@ -1317,7 +1453,7 @@ def test_the_helper_rejects_a_different_candidate_wheel_filename(
     want = validator.LANE_EXPECTATIONS["macos_x64_py312"]
     report = _install_report(want)
     _candidate_entry(report)["download_info"]["url"] = (
-        "https://example.invalid/packages/metrifid-0.7.1-py3-none-manylinux1_x86_64.whl"
+        "https://example.invalid/packages/metrifid-0.7.2-py3-none-manylinux1_x86_64.whl"
     )
     _write(green_tree / "lane-macos_x64_py312" / "install_report.json", report)
     with pytest.raises(validator.EvidenceError):
@@ -1338,7 +1474,7 @@ def test_the_helper_rejects_a_percent_encoded_lookalike_candidate(
         _validate(validator, green_tree)
 
 
-@pytest.mark.parametrize("version", ["9.9.9", "0.7.0", "0.7.1.dev0"])
+@pytest.mark.parametrize("version", ["9.9.9", "0.7.0", "0.7.2.dev0"])
 def test_the_helper_rejects_a_candidate_metadata_version_the_filename_does_not_encode(
     validator: ModuleType, green_tree: Path, version: str
 ) -> None:

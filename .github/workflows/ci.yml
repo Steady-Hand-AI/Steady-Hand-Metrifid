@@ -1135,6 +1135,24 @@ jobs:
           if [ "${{ steps.test_40.outputs.exit_code }}" != "40" ]; then exit 1; fi
           if [ "${{ steps.test_40.outputs.status }}" != "not_certified_compiled_differs" ]; then exit 1; fi
 
+      # The same real compiled difference, tolerated. The step must succeed while still publishing
+      # the identical outputs, because a caller that opts out of the gate still has to be able to
+      # read what Certify decided.
+      - name: Test physical difference with strict false (Exit 40)
+        id: test_40_non_strict
+        uses: ./
+        with:
+          baseline_mjcf: fixtures/baseline/model.xml
+          candidate_mjcf: fixtures/candidate/changed.xml
+          python_version: "3.11"
+          strict: "false"
+
+      - name: Verify non-strict Exit 40 Outputs
+        run: |
+          if [ "${{ steps.test_40_non_strict.outcome }}" != "success" ]; then exit 1; fi
+          if [ "${{ steps.test_40_non_strict.outputs.exit_code }}" != "40" ]; then exit 1; fi
+          if [ "${{ steps.test_40_non_strict.outputs.status }}" != "not_certified_compiled_differs" ]; then exit 1; fi
+
       - name: Test adversarial path inputs
         id: test_adverse
         uses: ./
@@ -1159,6 +1177,62 @@ jobs:
         run: |
           if [ "${{ steps.test_dash.outputs.exit_code }}" != "0" ]; then exit 1; fi
 
+      # A Certify-invocation canary. Absent outputs alone cannot prove Certify never ran: an
+      # action that invoked it and only then rejected the input would publish nothing either. The
+      # wrapper records the invocation, is proved able to observe a real one, and is then reset so
+      # its later absence is evidence.
+      - name: Arm the Certify invocation canary
+        run: |
+          cat << 'EOF' > "$RUNNER_TEMP/metrifid_canary.sh"
+          metrifid() {
+            if [ "$1" = "certify" ]; then
+              : > "$RUNNER_TEMP/metrifid-certify-invoked"
+            fi
+            command metrifid "$@"
+          }
+          export -f metrifid
+          EOF
+          rm -f "$RUNNER_TEMP/metrifid-certify-invoked" "$RUNNER_TEMP/metrifid-strict-expanded"
+          BASH_ENV="$RUNNER_TEMP/metrifid_canary.sh" bash -c 'metrifid certify --help > /dev/null'
+          if [ ! -e "$RUNNER_TEMP/metrifid-certify-invoked" ]; then
+            echo "the canary cannot observe a real certify invocation"
+            exit 1
+          fi
+          rm -f "$RUNNER_TEMP/metrifid-certify-invoked"
+          echo "BASH_ENV=$RUNNER_TEMP/metrifid_canary.sh" >> "$GITHUB_ENV"
+
+      # Valid Bash data. Pasted into the historical vulnerable STRICT="..." assignment it parses and
+      # runs the touch; carried through the accepted env-only action it stays literal, is refused,
+      # expands nothing, invokes nothing, and publishes nothing.
+      - name: Test adversarial strict value
+        id: test_strict_rejected
+        uses: ./
+        continue-on-error: true
+        with:
+          baseline_mjcf: fixtures/baseline/model.xml
+          candidate_mjcf: fixtures/candidate/model.xml
+          python_version: "3.11"
+          strict: '$(touch "$RUNNER_TEMP/metrifid-strict-expanded")'
+
+      - name: Verify the adversarial strict value is refused as data
+        run: |
+          if [ "${{ steps.test_strict_rejected.outcome }}" != "failure" ]; then exit 1; fi
+          if [ -n "${{ steps.test_strict_rejected.outputs.exit_code }}" ]; then exit 1; fi
+          if [ -n "${{ steps.test_strict_rejected.outputs.status }}" ]; then exit 1; fi
+          if [ -e "$RUNNER_TEMP/metrifid-strict-expanded" ]; then
+            echo "the strict value was expanded by a shell"
+            exit 1
+          fi
+          if [ -e "$RUNNER_TEMP/metrifid-certify-invoked" ]; then
+            echo "certify ran even though the input was refused"
+            exit 1
+          fi
+
+      - name: Retire the Certify invocation canary
+        run: |
+          echo "BASH_ENV=" >> "$GITHUB_ENV"
+          rm -f "$RUNNER_TEMP/metrifid_canary.sh"
+
       - name: Inject Stub for 64 and 70
         run: |
           cat << 'EOF' > /tmp/metrifid_stub.sh
@@ -1179,6 +1253,7 @@ jobs:
           baseline_mjcf: stub_64
           candidate_mjcf: stub_64
           python_version: "3.11"
+          strict: "false"
 
       - name: Verify stub 64
         run: |
@@ -1194,6 +1269,7 @@ jobs:
           baseline_mjcf: stub_70
           candidate_mjcf: stub_70
           python_version: "3.11"
+          strict: "false"
 
       - name: Verify stub 70
         run: |

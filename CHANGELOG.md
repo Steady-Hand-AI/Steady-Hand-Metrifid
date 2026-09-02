@@ -4,6 +4,28 @@ Notable changes to `metrifid`. Starting with `0.2.0`, release identifiers use ex
 dot-separated integer components: `MAJOR.MINOR.PATCH`. Historical development entries below
 remain as an audit trail and do not define the current release version.
 
+## 0.7.2
+
+### Added
+
+- The Metrifid Certify composite action accepts an optional `strict` input. It defaults to `"true"`
+  and fails the step when the compiled models differ. Setting it to `"false"` softens only that one
+  completed outcome, exit 40, so the caller can decide from the `exit_code` and `status` outputs.
+  An invalid `strict` value, an invocation refusal (exit 64), an operational error (exit 70), and
+  any unexpected exit remain fatal in both modes.
+- The README documents the action's inputs, outputs, and strict-mode boundary.
+
+### Changed
+
+- The source distribution no longer ships `tests/contract/test_ci_quality_environment.py`. That
+  contract reads repository-root files that are deliberately not packaged, so it could never run
+  from an extracted archive. Every test that ships is executable there.
+
+### Unchanged
+
+- The Python API, the command-line surface, receipt schemas and content, runtime admission, MuJoCo
+  dependency resolution, and model-comparison behavior are all unchanged.
+
 ## 0.7.1
 
 A packaging-only correction to dependency resolution on Intel macOS. No API, schema, receipt

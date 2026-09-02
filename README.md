@@ -102,6 +102,31 @@ simulation.
 
 
 
+## Use Metrifid in GitHub Actions
+
+The repository ships a composite action that certifies two model revisions inside a workflow. Check
+out the models first, then run the action:
+
+```yaml
+- uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+- id: certify
+  uses: Steady-Hand-AI/Steady-Hand-Metrifid@0.7.2
+  with:
+    baseline_mjcf: old/robot.xml
+    candidate_mjcf: new/robot.xml
+    strict: "false"
+- run: |
+    echo "exit code: ${{ steps.certify.outputs.exit_code }}"
+    echo "status:    ${{ steps.certify.outputs.status }}"
+```
+
+`strict` defaults to `"true"`, which fails the step when the compiled models differ. Setting it to
+`"false"` softens only that one completed outcome, exit 40: the step succeeds and the caller decides
+what to do from `exit_code` and `status`. Everything else still fails the step in both modes — an
+invalid `strict` value, an invocation refusal (exit 64), an operational error (exit 70), and any
+unexpected exit. Non-strict mode is not a way to ignore failures; it hands one specific, completed
+answer back to the workflow.
+
 ## Try the source-checkout example
 
 From a clone of the [Metrifid repository](https://github.com/Steady-Hand-AI/Steady-Hand-Metrifid):
