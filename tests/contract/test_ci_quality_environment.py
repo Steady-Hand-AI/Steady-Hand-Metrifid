@@ -17,8 +17,10 @@ import functools
 import hashlib
 import importlib.util
 import json
+import os
 import re
 import shutil
+import subprocess
 import sys
 from collections.abc import Callable
 from pathlib import Path
@@ -31,9 +33,10 @@ _REPOSITORY = Path(__file__).resolve().parents[2]
 _WORKFLOW = _REPOSITORY / ".github/workflows/ci.yml"
 _QUALITY_CONSTRAINTS = _REPOSITORY / ".github/quality-constraints.txt"
 _VALIDATOR = _REPOSITORY / ".github/scripts/validate_ci_evidence.py"
+_ACTION = _REPOSITORY / "action.yml"
 
 # The expected digest of the frozen release workflow.
-_FROZEN_WORKFLOW_SHA256 = "d60779dbc059c2427def6689e83926277a5892dbd3d6c597b9e81b6bafde1130"
+_FROZEN_WORKFLOW_SHA256 = "af43c36dcb24609d9a221347b321964a7240ff84caca6ce1d87a301bc496e594"
 
 _ALL_JOBS = (
     "build_and_quality",
@@ -204,6 +207,33 @@ def test_the_shipped_workflow_matches_the_frozen_bytes() -> None:
                 1,
             ),
             id="inactive_head_comparison",
+        ),
+        pytest.param(
+            "commented_output_assertion",
+            lambda t: t.replace(
+                '          if [ "${{ steps.test_64.outputs.status }}" != "refused" ]; then exit 1; fi',
+                '          # if [ "${{ steps.test_64.outputs.status }}" != "refused" ]; then exit 1; fi',
+                1,
+            ),
+            id="commented_output_assertion",
+        ),
+        pytest.param(
+            "noop_output_assertion",
+            lambda t: t.replace(
+                '"${{ steps.test_64.outputs.status }}" != "refused" ]; then exit 1; fi',
+                '"${{ steps.test_64.outputs.status }}" != "refused" ]; then :; fi',
+                1,
+            ),
+            id="noop_output_assertion",
+        ),
+        pytest.param(
+            "canary_propagation_removed",
+            lambda t: t.replace(
+                '          echo "BASH_ENV=$RUNNER_TEMP/metrifid_canary.sh" >> "$GITHUB_ENV"\n',
+                "",
+                1,
+            ),
+            id="canary_propagation_removed",
         ),
         pytest.param(
             "rebound_receipt_value",
@@ -500,7 +530,7 @@ def test_no_blocking_step_swallows_its_own_failure() -> None:
     tolerated = {
         "expanded_full_diagnostics": 1,
         "release_matrix_summary": 4,
-        "test_composite_action": 3,
+        "test_composite_action": 4,
     }
     total = 0
     for name, expected in tolerated.items():
@@ -516,9 +546,133 @@ def test_every_tolerated_failure_in_the_action_test_is_actually_asserted() -> No
     provoked = re.findall(
         r"id: (test_\w+)\n        uses: \./\n        continue-on-error: true", job
     )
-    assert len(provoked) == 3, provoked
+    assert len(provoked) == 4, provoked
     for step in provoked:
         assert f'steps.{step}.outcome }}}}" != "failure"' in job, step
+
+
+# ---- The reviewed release surfaces are locked by their bytes ----------------------------------
+#
+# `action.yml` and the CI workflow are held by exact SHA-256, not interpreted. This file neither
+# parses GitHub Actions YAML nor evaluates Bash: that would approximate two evaluators, and an
+# approximation is where a weakened step hides. Changing either surface requires a digest update,
+# review of the new bytes, and a hosted CI run; what the action does when it runs is proved by the
+# `test_composite_action` job on GitHub.
+
+_FROZEN_ACTION_SHA256 = "c80cad44468604fc9d3154254d9d57f87839ae681b311d72e5010331fdac38a9"
+
+_ADVERSARIAL_STRICT = '$(touch "$RUNNER_TEMP/metrifid-strict-expanded")'
+
+
+class FrozenActionError(AssertionError):
+    """The shipped composite action does not match the frozen bytes."""
+
+
+def _action_bytes() -> bytes:
+    """Return the shipped composite action exactly as it is stored."""
+    assert _ACTION.is_file(), f"missing action: {_ACTION}"
+    return _ACTION.read_bytes()
+
+
+def check_frozen_action(action: bytes) -> str:
+    """Require the action to match the frozen bytes, and return its digest."""
+    observed = hashlib.sha256(action).hexdigest()
+    if observed != _FROZEN_ACTION_SHA256:
+        raise FrozenActionError(
+            f"the composite action does not match the frozen bytes: expected "
+            f"{_FROZEN_ACTION_SHA256}, observed {observed}"
+        )
+    return observed
+
+
+def test_the_shipped_action_matches_the_frozen_bytes() -> None:
+    """The reviewed action is the one that ships."""
+    assert check_frozen_action(_action_bytes()) == _FROZEN_ACTION_SHA256
+
+
+@pytest.mark.parametrize(
+    ("name", "mutate"),
+    [
+        pytest.param(
+            "direct_interpolation",
+            lambda t: t.replace('if [ "$STRICT" !=', 'if [ "${{ inputs.strict }}" !=', 1),
+            id="direct_interpolation",
+        ),
+        pytest.param(
+            "weakened_strict_guard",
+            lambda t: t.replace(
+                'if [ "$STRICT" != "true" ] && [ "$STRICT" != "false" ]; then',
+                'if [ "$STRICT" = "nonsense" ]; then',
+                1,
+            ),
+            id="weakened_strict_guard",
+        ),
+        pytest.param(
+            "bare_platform_global_mktemp",
+            lambda t: t.replace(
+                'OUTPUT_DIR=$(mktemp -d "$RUNNER_TEMP/metrifid-certify-XXXXXX")',
+                "OUTPUT_DIR=$(mktemp -d)",
+                1,
+            ),
+            id="bare_platform_global_mktemp",
+        ),
+        pytest.param(
+            "runner_temp_guard_disabled",
+            lambda t: t.replace(
+                'if [ -z "${RUNNER_TEMP:-}" ] || [ ! -d "$RUNNER_TEMP" ]',
+                'if [ -n "${RUNNER_TEMP:-}" ] && [ ! -d "$RUNNER_TEMP" ]',
+                1,
+            ),
+            id="runner_temp_guard_disabled",
+        ),
+    ],
+)
+def test_any_action_byte_change_fails_the_freeze(name: str, mutate: Any) -> None:
+    """Reviewed bytes changed. The diagnosis is the digest, not a reading of the change."""
+    original = _action_bytes().decode("utf-8")
+    mutated = mutate(original)
+    assert mutated != original, name
+    with pytest.raises(FrozenActionError) as raised:
+        check_frozen_action(mutated.encode("utf-8"))
+    assert _FROZEN_ACTION_SHA256 in str(raised.value)
+    assert "observed" in str(raised.value)
+
+
+# The only behavioural claim here; both controls run their own temporary scripts.
+
+
+def test_the_adversarial_payload_executes_under_direct_interpolation(tmp_path: Path) -> None:
+    """The fixture only means anything if the historical vulnerable form would really run it.
+
+    A payload that failed to parse would leave the sentinel absent for the wrong reason.
+    """
+    sentinel = tmp_path / "metrifid-strict-expanded"
+    program = tmp_path / "vulnerable.sh"
+    program.write_text(f'STRICT="{_ADVERSARIAL_STRICT}"\n', encoding="utf-8")
+    environment = {**os.environ, "RUNNER_TEMP": str(tmp_path)}
+    parsed = subprocess.run(["bash", "-n", str(program)], capture_output=True, text=True)
+    assert parsed.returncode == 0, parsed.stderr
+    ran = subprocess.run(
+        ["bash", str(program)], capture_output=True, text=True, cwd=tmp_path, env=environment
+    )
+    assert ran.returncode == 0, ran.stderr
+    assert sentinel.exists(), "the payload must execute under direct interpolation"
+
+
+def test_the_adversarial_payload_is_inert_through_the_env_guard(tmp_path: Path) -> None:
+    """The same payload, handled the way the action handles it, expands nothing."""
+    sentinel = tmp_path / "metrifid-strict-expanded"
+    program = tmp_path / "guard.sh"
+    program.write_text(
+        'if [ "$STRICT" != "true" ] && [ "$STRICT" != "false" ]; then\n  exit 1\nfi\n',
+        encoding="utf-8",
+    )
+    environment = {**os.environ, "RUNNER_TEMP": str(tmp_path), "STRICT": _ADVERSARIAL_STRICT}
+    ran = subprocess.run(
+        ["bash", str(program)], capture_output=True, text=True, cwd=tmp_path, env=environment
+    )
+    assert ran.returncode == 1, "the value must be refused"
+    assert not sentinel.exists(), "the value must not be expanded"
 
 
 def test_multiline_shell_fails_fast_and_on_pipe_failure() -> None:
@@ -688,6 +842,189 @@ def test_no_smoke_or_focused_only_lane_acquires_the_build_frontend() -> None:
         assert all("build" not in _constrained_packages(step) for step in _steps(job)), name
 
 
+# ---- The Intel macOS lane runs the real composite action --------------------------------------
+#
+# A bare `mktemp -d` allocates under the platform-global temporary root, which macOS reaches through
+# a symlink, and Metrifid refuses an output path with a symlinked component. Nothing but executing
+# the real action on that runner catches it: the Linux action job cannot, and the macOS package
+# lanes never invoked the action at all. These assertions require that proof to stay in place after
+# a legitimate digest update; the digest itself remains the authority on the bytes.
+
+_MACOS_ACTION_LANE = "macos_x64_py312"
+_MACOS_ACTION_GUARD = "matrix.id == 'macos_x64_py312'"
+_MACOS_ACTION_ID = "macos_action"
+_MACOS_ACTION_STEP = "      - name: Real composite action on Intel macOS\n"
+_MACOS_LANE_EVIDENCE = "name: lane-${{ matrix.id }}"
+_MACOS_EXIT_CODE_CHECK = (
+    'if [ "${{ steps.macos_action.outputs.exit_code }}" != "0" ]; then exit 1; fi'
+)
+_MACOS_STATUS_CHECK = (
+    'if [ "${{ steps.macos_action.outputs.status }}"'
+    ' != "certified_compiled_equivalence" ]; then exit 1; fi'
+)
+_MACOS_ACTION_INPUTS = (
+    "baseline_mjcf: examples/certify/equivalent/baseline.xml",
+    "candidate_mjcf: examples/certify/equivalent/candidate.xml",
+    'python_version: "3.12"',
+)
+
+
+def _active_lines(step: str) -> list[str]:
+    """Return the step's lines with comments and indentation removed.
+
+    Raw substring membership cannot tell an assertion from a commented-out assertion, and a disabled
+    check that still reads as present is exactly how a proof survives review while proving nothing.
+    Comments go first, the same way `_constrained_packages` reads an install line.
+    """
+    return [code for line in step.splitlines() if (code := line.split("#", 1)[0].strip())]
+
+
+def _local_action_problems(steps: list[str]) -> list[str]:
+    """Return why the lane's `uses: ./` step is not the reviewed one."""
+    local = [step for step in steps if _step_property(step, "uses") == "./"]
+    if len(local) != 1:
+        return [f"expected exactly one local-action step, found {len(local)}"]
+    step = local[0]
+    active = _active_lines(step)
+    problems: list[str] = []
+    if _step_property(step, "id") != _MACOS_ACTION_ID:
+        problems.append(f"the local-action step is not id {_MACOS_ACTION_ID}")
+    if _step_property(step, "if") != _MACOS_ACTION_GUARD:
+        problems.append("the local-action step is not guarded to the Intel macOS row")
+    problems.extend(
+        f"the local-action step does not actively pass {wanted}"
+        for wanted in _MACOS_ACTION_INPUTS
+        if wanted not in active
+    )
+    return problems
+
+
+def _output_check_problems(steps: list[str]) -> list[str]:
+    """Return why the lane does not actively require both of the action's published outputs."""
+    checks = [step for step in steps if f"steps.{_MACOS_ACTION_ID}.outputs" in step]
+    if len(checks) != 1:
+        return [f"expected exactly one output check, found {len(checks)}"]
+    step = checks[0]
+    active = _active_lines(step)
+    problems: list[str] = []
+    if _step_property(step, "if") != _MACOS_ACTION_GUARD:
+        problems.append("the output check is not guarded to the Intel macOS row")
+    if _MACOS_EXIT_CODE_CHECK not in active:
+        problems.append("the output check does not actively require exit_code 0")
+    if _MACOS_STATUS_CHECK not in active:
+        problems.append("the output check does not actively require the certified status")
+    if _step_property(step, "continue-on-error") is not None:
+        problems.append("the output check tolerates its own failure")
+    return problems
+
+
+def _ordering_problems(steps: list[str]) -> list[str]:
+    """Return why the action proof does not sit after the lane's evidence upload.
+
+    Installing the local action rewrites this runner's environment, so it must not run before the
+    wheel the lane verified or the evidence the release summary reads.
+    """
+    where: dict[str, int] = {}
+    for index, step in enumerate(steps):
+        if _MACOS_LANE_EVIDENCE in step:
+            where["upload"] = index
+        if _step_property(step, "id") == _MACOS_ACTION_ID:
+            where["action"] = index
+        if f"steps.{_MACOS_ACTION_ID}.outputs" in step:
+            where["check"] = index
+    if set(where) != {"upload", "action", "check"}:
+        return [f"the lane is missing one of upload/action/check: {sorted(where)}"]
+    if not where["upload"] < where["action"] < where["check"]:
+        return [f"the action proof is not placed after the evidence upload: {where}"]
+    return []
+
+
+def _macos_action_problems(text: str) -> list[str]:
+    """Return every reason the Intel macOS action proof is not intact in `text`."""
+    steps = _steps(_job(text, "matrix_lane"))
+    return _local_action_problems(steps) + _output_check_problems(steps) + _ordering_problems(steps)
+
+
+def _comment_out(text: str, assertion: str) -> str:
+    """Disable one assertion the way a person disables it: by commenting it out, not deleting it."""
+    line = f"          {assertion}\n"
+    assert text.count(line) == 1, assertion
+    return text.replace(line, f"          # {assertion}\n", 1)
+
+
+def _drop_macos_action_step(text: str) -> str:
+    """Remove the whole `uses: ./` step, leaving the guarded output check behind."""
+    start = text.index(_MACOS_ACTION_STEP)
+    end = text.index("      - name: Verify the Intel macOS action outputs\n", start)
+    return text[:start] + text[end:]
+
+
+def _misguard_macos_action_step(text: str) -> str:
+    """Point the guard at a row the matrix never produces, so the action never runs."""
+    return text.replace(
+        f"        if: {_MACOS_ACTION_GUARD}\n        uses: ./\n",
+        "        if: matrix.id == 'no_such_lane'\n        uses: ./\n",
+        1,
+    )
+
+
+def _bypass_local_action(text: str) -> str:
+    """Replace the action with a schema-valid shell step that cannot exercise it.
+
+    The whole `uses:`/`with:` block goes, so the result is an ordinary `run:` step rather than a
+    step carrying both keys, which GitHub would reject before this boundary is ever reached.
+    """
+    start = text.index("        uses: ./\n")
+    tail = '          python_version: "3.12"\n'
+    end = text.index(tail, start) + len(tail)
+    return text[:start] + "        run: echo 'certification skipped'\n" + text[end:]
+
+
+def _comment_out_macos_status_check(text: str) -> str:
+    """Stop requiring the action's status output."""
+    return _comment_out(text, _MACOS_STATUS_CHECK)
+
+
+def _comment_out_macos_exit_code_check(text: str) -> str:
+    """Stop requiring the action's exit-code output."""
+    return _comment_out(text, _MACOS_EXIT_CODE_CHECK)
+
+
+def test_the_intel_macos_lane_runs_the_real_composite_action() -> None:
+    """The action's macOS boundary is proved by running the action, not by asserting about it."""
+    assert _macos_action_problems(_workflow_text()) == []
+
+
+@pytest.mark.parametrize(
+    ("name", "mutate"),
+    [
+        pytest.param("removed", _drop_macos_action_step, id="removed"),
+        pytest.param("misguarded", _misguard_macos_action_step, id="misguarded"),
+        pytest.param("bypassed", _bypass_local_action, id="bypassed"),
+        pytest.param("status_commented", _comment_out_macos_status_check, id="status_commented"),
+        pytest.param(
+            "exit_code_commented", _comment_out_macos_exit_code_check, id="exit_code_commented"
+        ),
+    ],
+)
+def test_each_way_of_defeating_the_macos_action_proof_is_rejected(name: str, mutate: Any) -> None:
+    """A digest update must not be able to carry a silently disabled proof with it."""
+    text = _workflow_text()
+    mutated = mutate(text)
+    assert mutated != text, name
+    assert _macos_action_problems(mutated), name
+
+
+def test_only_the_action_job_and_the_intel_macos_lane_install_the_local_action() -> None:
+    """`uses: ./` reinstalls Metrifid into a runner, so its blast radius stays known and small."""
+    text = _workflow_text()
+    owners = {name for name in _ALL_JOBS if "uses: ./" in _job(text, name)}
+    assert owners == {"matrix_lane", "test_composite_action"}, owners
+    # The lane the guard names is one of the declared smoke rows, so this adds no matrix entry.
+    assert _MACOS_ACTION_LANE in _SMOKE_LANES
+    assert _MACOS_ACTION_GUARD == f"matrix.id == '{_MACOS_ACTION_LANE}'"
+
+
 @pytest.mark.parametrize("owner", _COMPLETE_SUITE_OWNERS)
 def test_disabling_one_owners_provision_fails_the_contract(owner: str) -> None:
     """Each owner is proved on its own, and a commented-out install never counts as provisioning."""
@@ -768,7 +1105,7 @@ _HEAD_SHA = "2" * 40
 # The synthetic candidate is a real wheel name carrying the real release version, because the
 # summary now binds the install report to the accepted artifact by file name and by the version
 # that file name encodes. A placeholder could not exercise either check.
-_CANDIDATE_VERSION = "0.7.1"
+_CANDIDATE_VERSION = "0.7.2"
 _CANDIDATE_WHEEL = f"metrifid-{_CANDIDATE_VERSION}-py3-none-any.whl"
 _CANDIDATE_SDIST = f"metrifid-{_CANDIDATE_VERSION}.tar.gz"
 _DIGEST = "a" * 64
@@ -1317,7 +1654,7 @@ def test_the_helper_rejects_a_different_candidate_wheel_filename(
     want = validator.LANE_EXPECTATIONS["macos_x64_py312"]
     report = _install_report(want)
     _candidate_entry(report)["download_info"]["url"] = (
-        "https://example.invalid/packages/metrifid-0.7.1-py3-none-manylinux1_x86_64.whl"
+        "https://example.invalid/packages/metrifid-0.7.2-py3-none-manylinux1_x86_64.whl"
     )
     _write(green_tree / "lane-macos_x64_py312" / "install_report.json", report)
     with pytest.raises(validator.EvidenceError):
@@ -1338,7 +1675,7 @@ def test_the_helper_rejects_a_percent_encoded_lookalike_candidate(
         _validate(validator, green_tree)
 
 
-@pytest.mark.parametrize("version", ["9.9.9", "0.7.0", "0.7.1.dev0"])
+@pytest.mark.parametrize("version", ["9.9.9", "0.7.0", "0.7.2.dev0"])
 def test_the_helper_rejects_a_candidate_metadata_version_the_filename_does_not_encode(
     validator: ModuleType, green_tree: Path, version: str
 ) -> None:

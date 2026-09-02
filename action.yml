@@ -18,6 +18,15 @@ inputs:
     description: "Python version to use for Metrifid"
     required: false
     default: "3.11"
+  strict:
+    description: >-
+      Whether a completed compiled difference fails the step. With the default "true", Certify
+      exit 40 (the compiled models differ) fails the step. With "false", exit 40 returns success
+      and the exit_code and status outputs are still published, so the caller can decide what to
+      do. Invocation refusals (64), operational errors (70) and unexpected exits always fail the
+      step in both modes. Only the exact lowercase values "true" and "false" are accepted.
+    required: false
+    default: "true"
 
 outputs:
   exit_code:
@@ -67,8 +76,28 @@ runs:
         CANDIDATE_MJCF: ${{ inputs.candidate_mjcf }}
         BASELINE_ROOT: ${{ inputs.baseline_root }}
         CANDIDATE_ROOT: ${{ inputs.candidate_root }}
+        STRICT: ${{ inputs.strict }}
       run: |
-        OUTPUT_DIR=$(mktemp -d)
+        # Validated as data before any directory is allocated or metrifid is invoked. The value
+        # arrives through env and is never interpolated into program text, and the rejection
+        # message is fixed so a hostile value cannot be echoed into a workflow command.
+        if [ "$STRICT" != "true" ] && [ "$STRICT" != "false" ]; then
+          echo "::error::Invalid strict input. Must be exactly 'true' or 'false'."
+          exit 1
+        fi
+
+        # Certification output is allocated beneath the runner-owned temporary directory. A
+        # bare `mktemp -d` selects the platform-global root, which macOS reaches through a
+        # symlink, and Metrifid correctly refuses an output path with a symlinked component.
+        # There is no fallback: an unusable runner temp is an error, not a reason to write
+        # somewhere less controlled. The template keeps its Xs last so GNU and BSD mktemp
+        # both accept it.
+        if [ -z "${RUNNER_TEMP:-}" ] || [ ! -d "$RUNNER_TEMP" ] || [ ! -w "$RUNNER_TEMP" ]; then
+          echo "::error::RUNNER_TEMP is not a writable directory. Metrifid Certify allocates its output there."
+          exit 1
+        fi
+
+        OUTPUT_DIR=$(mktemp -d "$RUNNER_TEMP/metrifid-certify-XXXXXX")
         
         cmd=(
           metrifid certify
@@ -104,8 +133,13 @@ runs:
           exit 0
         elif [ $EXIT_CODE -eq 40 ]; then
           echo "status=not_certified_compiled_differs" >> "$GITHUB_OUTPUT"
-          echo "::error::Metrifid certify failed: compiled models differ (exit code 40)."
-          exit 1
+          if [ "$STRICT" = "true" ]; then
+            echo "::error::Metrifid certify: compiled models differ (exit code 40)."
+            exit 1
+          else
+            echo "::warning::Metrifid certify: compiled models differ (exit code 40). Step succeeds because strict is false."
+            exit 0
+          fi
         elif [ $EXIT_CODE -eq 64 ]; then
           echo "status=refused" >> "$GITHUB_OUTPUT"
           echo "::error::Metrifid certify refused execution (exit code 64)."

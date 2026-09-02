@@ -109,6 +109,9 @@ include = [
   "/tools/native_upgrade_profile_worker.py",
   "/tools/validate_mujoco_compatibility.py",
 ]
+# This one contract reads repository-root files that are deliberately not packaged, so it could
+# never run from an extracted archive. Excluding it keeps every shipped test executable there.
+exclude = ["/tests/contract/test_ci_quality_environment.py"]
 
 [tool.pytest.ini_options]
 addopts = "--import-mode=importlib --strict-config --strict-markers -ra"
