@@ -86,7 +86,18 @@ runs:
           exit 1
         fi
 
-        OUTPUT_DIR=$(mktemp -d)
+        # Certification output is allocated beneath the runner-owned temporary directory. A
+        # bare `mktemp -d` selects the platform-global root, which macOS reaches through a
+        # symlink, and Metrifid correctly refuses an output path with a symlinked component.
+        # There is no fallback: an unusable runner temp is an error, not a reason to write
+        # somewhere less controlled. The template keeps its Xs last so GNU and BSD mktemp
+        # both accept it.
+        if [ -z "${RUNNER_TEMP:-}" ] || [ ! -d "$RUNNER_TEMP" ] || [ ! -w "$RUNNER_TEMP" ]; then
+          echo "::error::RUNNER_TEMP is not a writable directory. Metrifid Certify allocates its output there."
+          exit 1
+        fi
+
+        OUTPUT_DIR=$(mktemp -d "$RUNNER_TEMP/metrifid-certify-XXXXXX")
         
         cmd=(
           metrifid certify

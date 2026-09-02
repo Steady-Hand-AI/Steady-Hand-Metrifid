@@ -458,6 +458,26 @@ jobs:
           path: lane-evidence/
           if-no-files-found: error
 
+      # The composite action allocates its certification output beneath RUNNER_TEMP. Intel
+      # macOS is the boundary that proves it: there the platform-global temporary root is
+      # reached through a symlink, which Metrifid refuses. This runs after the lane's evidence
+      # upload, so installing the local action into this runner cannot affect any earlier
+      # wheel check or the evidence already uploaded.
+      - name: Real composite action on Intel macOS
+        id: macos_action
+        if: matrix.id == 'macos_x64_py312'
+        uses: ./
+        with:
+          baseline_mjcf: examples/certify/equivalent/baseline.xml
+          candidate_mjcf: examples/certify/equivalent/candidate.xml
+          python_version: "3.12"
+
+      - name: Verify the Intel macOS action outputs
+        if: matrix.id == 'macos_x64_py312'
+        run: |
+          if [ "${{ steps.macos_action.outputs.exit_code }}" != "0" ]; then exit 1; fi
+          if [ "${{ steps.macos_action.outputs.status }}" != "certified_compiled_equivalence" ]; then exit 1; fi
+
   minimum_dependency_lane:
     name: linux_x64_py311_numpy_min (full)
     # The second complete suite. It is causally different from the primary lane: it proves the
