@@ -1,5 +1,11 @@
 # Metrifid
 
+[![PyPI version](https://img.shields.io/pypi/v/metrifid.svg)](https://pypi.org/project/metrifid/)
+[![Python](https://img.shields.io/pypi/pyversions/metrifid.svg)](https://pypi.org/project/metrifid/)
+[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+[![CI](https://github.com/Steady-Hand-AI/Steady-Hand-Metrifid/actions/workflows/ci.yml/badge.svg)](https://github.com/Steady-Hand-AI/Steady-Hand-Metrifid/actions)
+[![GitHub Action](https://img.shields.io/badge/Marketplace-Metrifid%20Certify-blue?logo=github)](https://github.com/marketplace/actions/metrifid-certify)
+
 **Know whether your MuJoCo model actually changed — before you argue about whether the simulation did.**
 
 A source diff cannot tell you. Reordered attributes, reformatted XML and moved includes change

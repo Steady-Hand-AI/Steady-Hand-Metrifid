@@ -1,28 +1,21 @@
 # Security Policy
 
-## Supported versions
+## Supported Versions
 
-Security fixes are applied to the newest published release on PyPI. Earlier releases,
-development snapshots, and unpublished source states are not patched.
+Currently, Metrifid is beta software under active development. The only supported version is the current release (`0.7.x`).
 
-| Version | Supported |
-| --- | --- |
-| the newest published release | yes |
-| earlier releases, development snapshots, and unpublished source states | no |
+| Version | Supported          |
+| ------- | ------------------ |
+| 0.7.x   | :white_check_mark: |
+| < 0.7.0 | :x:                |
 
-Naming a fixed version here would go stale the moment the next one is published, so the policy is
-stated in terms of the newest published release. The release list on PyPI and the repository's
-GitHub releases say which version that currently is.
+## Reporting a Vulnerability
 
-## Reporting a vulnerability
+Please do not report security vulnerabilities through public GitHub issues.
 
-Use GitHub private vulnerability reporting:
+Instead, please report vulnerabilities responsibly via [GitHub Private Vulnerability Reporting](https://github.com/Steady-Hand-AI/Steady-Hand-Metrifid/security/advisories/new). If you prefer, you can also reach out to the maintainers directly.
 
-https://github.com/Steady-Hand-AI/Steady-Hand-Metrifid/security/advisories/new
-
-Do not include exploit details in a public issue, discussion, pull request, or commit message before a fix is available. Include the affected version or commit, impact, reproduction conditions, and a minimal sanitized proof of concept when needed. Do not include credentials, private keys, proprietary robot assets, confidential models, or unrelated personal data.
-
-Maintainers acknowledge reports through the private advisory channel and coordinate a fix and disclosure timeline. Response times depend on severity, reproducibility, and the current alpha state.
+We ask that you wait until we have reviewed and addressed the vulnerability before disclosing it publicly. We will try to address reports as quickly as possible.
 
 ## Scope
 

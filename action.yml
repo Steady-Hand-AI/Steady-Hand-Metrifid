@@ -1,5 +1,8 @@
 name: "Metrifid Certify"
 description: "Proves whether two MJCF source trees compile to byte-identical binary MJB artifacts."
+branding:
+  icon: 'shield'
+  color: 'blue'
 
 inputs:
   baseline_mjcf:
