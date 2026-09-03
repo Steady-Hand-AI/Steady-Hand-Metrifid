@@ -559,7 +559,7 @@ def test_every_tolerated_failure_in_the_action_test_is_actually_asserted() -> No
 # review of the new bytes, and a hosted CI run; what the action does when it runs is proved by the
 # `test_composite_action` job on GitHub.
 
-_FROZEN_ACTION_SHA256 = "c80cad44468604fc9d3154254d9d57f87839ae681b311d72e5010331fdac38a9"
+_FROZEN_ACTION_SHA256 = "d951be794c359f0e4d91e448c40b99bd38aa9a3a31122693b262ce6ecba863b5"
 
 _ADVERSARIAL_STRICT = '$(touch "$RUNNER_TEMP/metrifid-strict-expanded")'
 
