@@ -36,7 +36,7 @@ _VALIDATOR = _REPOSITORY / ".github/scripts/validate_ci_evidence.py"
 _ACTION = _REPOSITORY / "action.yml"
 
 # The expected digest of the frozen release workflow.
-_FROZEN_WORKFLOW_SHA256 = "af43c36dcb24609d9a221347b321964a7240ff84caca6ce1d87a301bc496e594"
+_FROZEN_WORKFLOW_SHA256 = "a202183f36d2feda738eaf83323e37e6cfa99c73505c8109b4046977e3cf39a5"
 
 _ALL_JOBS = (
     "build_and_quality",

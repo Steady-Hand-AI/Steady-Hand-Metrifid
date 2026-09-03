@@ -80,6 +80,10 @@ jobs:
         with:
           python-version: "3.11"
 
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86
+        with:
+          enable-cache: true
+
       - name: Record the exact review subject
         # On a pull request GitHub checks out a synthetic merge commit, not the head a reviewer
         # reads. Recording only that checkout leaves a later admission unable to say which head it
@@ -174,19 +178,19 @@ jobs:
         run: python -m pip freeze > quality-evidence/pip_freeze.txt
 
       - name: Ruff check
-        run: python -m ruff check .
+        run: uv run ruff check .
 
       - name: Ruff format check
-        run: python -m ruff format --check .
+        run: uv run ruff format --check .
 
       - name: MyPy strict
-        run: python -m mypy --strict src/metrifid .github/scripts/validate_ci_evidence.py
+        run: uv run mypy --strict src/metrifid .github/scripts/validate_ci_evidence.py
 
       - name: Build one original wheel and one original sdist through isolated PEP 517
         run: python -m build
 
       - name: Twine check
-        run: python -m twine check --strict dist/*
+        run: uv run twine check --strict dist/*
 
       - name: Record the original artifact manifest
         run: |
@@ -268,6 +272,10 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: ${{ matrix.python }}
+
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86
+        with:
+          enable-cache: true
 
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
@@ -379,13 +387,13 @@ jobs:
       - name: Complete installed-wheel test suite
         if: matrix.tier == 'full'
         run: >-
-          python -m pytest -q -n auto --dist loadfile --randomly-seed=17
+          uv run pytest -q -n auto --dist loadfile --randomly-seed=17
           --junitxml=lane-evidence/full.xml tests
 
       - name: Focused semantic suites for this boundary
         if: matrix.tier == 'smoke'
         run: >-
-          python -m pytest -q -n auto --dist loadfile --randomly-seed=17
+          uv run pytest -q -n auto --dist loadfile --randomly-seed=17
           --junitxml=lane-evidence/focused.xml ${{ env.FOCUSED_SEMANTIC_TESTS }}
 
       - name: Bundled first-use example
@@ -492,6 +500,10 @@ jobs:
         with:
           python-version: "3.11"
 
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86
+        with:
+          enable-cache: true
+
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           name: ${{ env.ORIGINAL_ARTIFACT }}
@@ -567,7 +579,7 @@ jobs:
 
       - name: Complete installed-wheel test suite
         run: >-
-          python -m pytest -q -n auto --dist loadfile --randomly-seed=17
+          uv run pytest -q -n auto --dist loadfile --randomly-seed=17
           --junitxml=lane-evidence/full.xml tests
 
       - name: Bundled first-use example
@@ -640,6 +652,10 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: "3.12"
+
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86
+        with:
+          enable-cache: true
 
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
@@ -719,7 +735,7 @@ jobs:
 
       - name: Directly affected retained-runtime tests
         run: >-
-          python -m pytest -q -n auto --dist loadfile --randomly-seed=17
+          uv run pytest -q -n auto --dist loadfile --randomly-seed=17
           --junitxml=retained-evidence/focused.xml ${{ env.FOCUSED_SEMANTIC_TESTS }}
 
       - name: All retained-profile command help surfaces
@@ -759,6 +775,10 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: "3.12"
+
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86
+        with:
+          enable-cache: true
 
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
@@ -831,7 +851,7 @@ jobs:
 
       - name: Focused public-surface suites against the sdist installation
         run: >-
-          python -m pytest -q -n auto --dist loadfile --randomly-seed=17
+          uv run pytest -q -n auto --dist loadfile --randomly-seed=17
           --junitxml=sdist-evidence/focused.xml ${{ env.SDIST_FOCUSED_TESTS }}
 
       - name: All installed command help surfaces
@@ -879,6 +899,10 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: "3.12"
+
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86
+        with:
+          enable-cache: true
 
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
@@ -1017,6 +1041,10 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
 
+      - uses: astral-sh/setup-uv@d4b2f3b6ecc6e67c4457f6d3e41ec42d3d0fcb86
+        with:
+          enable-cache: true
+
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           name: ${{ env.ORIGINAL_ARTIFACT }}
@@ -1082,7 +1110,7 @@ jobs:
 
       - name: Complete installed-wheel test suite
         run: >-
-          python -m pytest -q -n auto --dist loadfile --randomly-seed=17
+          uv run pytest -q -n auto --dist loadfile --randomly-seed=17
           --junitxml=diagnostic-evidence/full.xml tests
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a

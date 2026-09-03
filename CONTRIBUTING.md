@@ -27,6 +27,17 @@ pull request.
 ## Set up
 
 ```bash
+# Install uv if needed
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Sync environment and run tests
+uv sync
+uv run pytest
+```
+
+Alternatively, you can set up a traditional `pip` virtual environment:
+
+```bash
 python -m venv .venv && source .venv/bin/activate
 python -m pip install -e ".[dev]"
 ```
@@ -53,13 +64,19 @@ here: <https://github.com/Steady-Hand-AI/Steady-Hand-Metrifid/blob/main/.github/
 
 ## Before you open a pull request
 
-Use the editable development environment for static quality gates:
+You can use `make check` (or the direct `uv` / `pip` commands) to run static quality gates:
 
 ```bash
-python -m ruff check .
-python -m ruff format --check .
-python -m mypy --strict src/metrifid
+# Using Makefile shortcut:
+make check
+
+# Or directly with uv:
+uv run ruff check .
+uv run ruff format --check .
+uv run mypy --strict src/metrifid
 ```
+
+(Or with pip: `python -m ruff check .`, `python -m ruff format --check .`, `python -m mypy --strict src/metrifid`)
 
 Run product, integration, security, receipt, command, and release tests from a separate noneditable
 wheel environment:

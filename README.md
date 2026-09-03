@@ -89,7 +89,7 @@ Then certify two of your own model revisions:
 metrifid certify old/robot.xml new/robot.xml --output out/
 ```
 
-Working from a source checkout instead? `python -m pip install .` installs the same package;
+Working from a source checkout instead? `uv sync` (or `python -m pip install .`) installs the same package;
 integration, security, receipt, and release evidence must run from a noneditable installation.
 
 ```text
