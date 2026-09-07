@@ -27,8 +27,8 @@ python -c "import metrifid; print(metrifid.__version__)"
 
 ## Choose your starting point
 
-You do not have to know which of the seven commands you need. Start from the thing that actually
-changed, and the first result will tell you where to go next.
+You do not have to know which command you need. Start from the thing that actually changed, and
+the first result will tell you where to go next.
 
 ### A model or asset changed
 
@@ -49,6 +49,10 @@ exit 40  NOT_CERTIFIED_COMPILED_DIFFERS   at least one byte differed
 
 Exit 40 here means the compiled artifacts differ. It does not mean the behavior is wrong, and it does
 not mean anything crashed.
+
+If this is your first run, or you want the same compiled comparison with a report you can open and
+no policy to declare, use `metrifid diff` instead. It is the first-use path described in
+[section 8](#8-your-first-10-minutes).
 
 ### The MuJoCo runtime changed
 
@@ -105,8 +109,8 @@ It helps you answer six different engineering questions:
 5. **Would my declared workloads even notice the model changes I care about?**
 6. **Can I create the complete native-profile migration evidence and decide it in one command?**
 
-Metrifid answers those questions through seven commands, including two paths to the same Runtime
-Review referee:
+Metrifid answers those questions through seven expert commands, including two paths to the same
+Runtime Review referee:
 
 ```text
 metrifid certify
@@ -117,6 +121,10 @@ metrifid qualify-workload
 metrifid run-runtime-review
 metrifid review-runtime
 ```
+
+Two further routes, `metrifid diff` and `metrifid show`, are entry points to the same static
+model-release review rather than additional decisions. `diff` compares two model versions with no
+policy file, and `show` reads a receipt one of them retained.
 
 A useful product description is:
 
@@ -155,6 +163,7 @@ Use this decision map:
 
 | Your question | Command | What you must provide |
 | --- | --- | --- |
+| “What changed between these two model versions, and where can I read the evidence?” | `metrifid diff` | Two MJCF entrypoints. An output directory is optional |
 | “Did these two MJCF source trees compile to the exact same model?” | `metrifid certify` | Two MJCF entrypoints and an output directory |
 | “What compiled fields changed, and did my policy allow them?” | `metrifid review-model` | Two MJCF entrypoints, a model-release policy, and an output directory |
 | “Did the candidate behave differently on my exact replay workload?” | `metrifid compare` | A strict comparison JSON configuration, state artifact, action artifact, models, and tolerances |
@@ -162,13 +171,15 @@ Use this decision map:
 | “Would my workloads notice these probe models, and which probes stay invisible?” | `metrifid qualify-workload` | One baseline model, probe models you supply at declared magnitudes, three to sixteen workloads, and tolerances. The parameter, direction, magnitude and `magnitude_semantics` labels are preserved user declarations, not findings. |
 | “Can I create and decide one exact native-profile migration?” | `metrifid run-runtime-review` | Two explicit already-prepared Python profile launchers and one strict self-contained manifest. |
 | “I already retained the twelve native evidence cells; can I decide them?” | `metrifid review-runtime` | One strict retained-evidence Runtime Review configuration. |
+| “What did that saved result actually record?” | `metrifid show` | One retained receipt. No MuJoCo, no NumPy, no output directory |
 
 A practical progression is:
 
 ```text
-Start with certify.
+Start with diff. It needs only the two files, and it retains the evidence for you.
+Use certify when you want the certificate form of the same compiled comparison.
 
-If certify reports a compiled difference:
+If the compiled models differ:
     use review-model to classify the change against your policy, and
     use compare when you need a workload-bounded behavioral decision.
 
@@ -302,6 +313,8 @@ Run:
 
 ```bash
 metrifid --help
+metrifid diff --help
+metrifid show --help
 metrifid certify --help
 metrifid review-model --help
 metrifid compare --help
@@ -323,15 +336,132 @@ When a native command refuses the environment, it exits with `64` and prints a s
 
 ## 8. Your first 10 minutes
 
-The best first experience is the bundled Certify example.
+### Step 1: run the demo
 
-From the repository root:
+The fastest first result needs no checkout, no arguments, and no network:
+
+```bash
+python -m metrifid.demo
+```
+
+The demo writes three tiny models into a temporary directory, compares two pairs through the same
+`diff` operation the command line uses, and prints where it retained the evidence:
+
+```text
+different source, same compiled model : exit 0 (identical)
+  receipt                             : ~/.metrifid/runs/<run>/model_release.json
+  report                              : ~/.metrifid/runs/<run>/report.html
+one changed mass                      : exit 40 (different)
+  receipt                             : ~/.metrifid/runs/<run>/model_release.json
+  report                              : ~/.metrifid/runs/<run>/report.html
+Metrifid demo passed
+```
+
+That shows both sides of the core decision:
+
+- different source text can compile to the exact same model;
+- one physical parameter change can alter the compiled artifact.
+
+The three demo models are discarded with the temporary directory. The two results are not: the
+printed paths stay on disk after the command exits, and stay readable.
+
+### Step 2: compare a supplied pair
+
+```bash
+metrifid diff BASELINE.xml CANDIDATE.xml [--baseline-root DIR] [--candidate-root DIR]
+                                         [--output DIR] [--json] [--full]
+```
+
+`diff` compiles both models with one recorded MuJoCo runtime, compares the compiled artifacts byte
+for byte, and retains three files: `model_release.json` for automation and exact evidence,
+`model_release.md` for human review, and `report.html` for an offline browser report.
+
+```bash
+metrifid diff old/robot.xml new/robot.xml --output out/
+```
+
+Without `--output`, the run is retained under `~/.metrifid/runs/<run>/`. With `--output DIR`, that
+directory must be absent or empty, and must lie outside both model roots.
+
+| Exit | Meaning |
+| ---: | --- |
+| `0` | the compiled artifacts are byte-identical |
+| `40` | the compiled artifacts differ |
+| `64` | the request was refused: a bad path, an unusable output directory, an unreadable receipt |
+| `70` | internal failure |
+
+Exit 0 and exit 40 are both completed comparisons: Metrifid finished the work and is reporting what
+it found. Only 64 and 70 mean no comparison was made. A script that treats every nonzero exit as a
+failure therefore misreads a completed difference; [`README.md`](../README.md) carries a copyable
+form of the check that accepts 0 and 40 and still stops on 64 and 70.
+
+### Step 3: name the complete root when assets are shared
+
+Each model root is measured whole. A root defaults to the directory holding the entrypoint, so
+every file beside the model is admitted, not only the file you named. When the two versions live in
+subdirectories and draw on assets from a directory above them, name the wider root deliberately:
+
+```bash
+metrifid diff old/models/robot.xml new/models/robot.xml \
+  --baseline-root old/ \
+  --candidate-root new/ \
+  --output out/
+```
+
+A run reports the root it used and how many files it measured, so you can check that the root you
+meant is the root that was measured:
+
+```text
+Compared
+  baseline   .../examples/certify/equivalent/baseline.xml
+             root .../examples/certify/equivalent  2 file(s) measured
+  candidate  .../examples/certify/changed.xml
+             root .../examples/certify  5 file(s) measured
+  every file under each root is measured, not only the entrypoint
+  the two roots differ: the measured file counts are not a change list
+```
+
+### Step 4: open the report
+
+`report.html` is a self-contained offline page. Open it in any browser. `model_release.md` is the
+same decision as Markdown, and `model_release.json` is the exact machine receipt.
+
+### Step 5: read the saved result later
+
+```bash
+metrifid show RECEIPT [--json] [--full]
+```
+
+`show` reads a retained receipt, compiles nothing and writes nothing. It imports no MuJoCo and no
+NumPy, so a retained result stays readable on a machine that has neither, and it reads a
+`certification.json` written by `certify` as well as a `model_release.json` written by `diff`.
+
+`show` exits 0 for any receipt it could read, whatever outcome that receipt recorded. Its 0 is not a
+certification that the two models are identical; the recorded status is reported inside the result:
+
+```text
+Compiled model changed.
+71 serialized byte(s) differ, first at offset 1692.
+Recorded evaluation: REVIEW_REQUIRED. The run that produced it exited 40.
+```
+
+### What the result is bound to, and what it does not claim
+
+- **One recorded runtime.** A result is bound to the exact MuJoCo version, Python build and
+  platform recorded in it, and says nothing about any other.
+- **Coverage that can be unknown.** The field producer omits some compiled members, and a compiled
+  object that carries no name cannot be attributed to a named object. The result states both.
+  Unknown coverage is not zero coverage and not full coverage.
+- **No approval.** A comparison is not approval, sign-off, or a safety or correctness claim. It
+  reports what the compiled bytes did under one recorded runtime.
+
+### The bundled repository example
+
+From a source checkout, the Certify example runs the same distinction through `certify`:
 
 ```bash
 python examples/certify/run_example.py
 ```
-
-Expected result:
 
 ```text
 different source, same compiled model : CERTIFIED_COMPILED_EQUIVALENCE (exit 0)
@@ -339,11 +469,6 @@ one changed mass                      : NOT_CERTIFIED_COMPILED_DIFFERS (exit 40)
 
 all 6 checks passed
 ```
-
-This example demonstrates both sides of the core decision:
-
-- different source text can compile to the exact same model;
-- one physical parameter change can alter the compiled artifact.
 
 Read the example guide here:
 
@@ -641,6 +766,7 @@ The key schemas are:
 | Output | Schema |
 | --- | --- |
 | `certification.json` | `metrifid.compiled_equivalence_receipt`, schema version `1` |
+| `model_release.json`, retained by `diff` and by `review-model` | `metrifid.model_release_receipt`, schema version `1` |
 | field details inside a differing certificate | `metrifid.compiled_field_report`, schema version `1` |
 | `comparison.json` | `metrifid.comparison_receipt`, schema version `1` |
 | `timestep_audit.json` | `metrifid.timestep_audit`, schema version `1` |
@@ -719,10 +845,10 @@ Start at the repository root.
 ### Path A: you maintain an MJCF repository
 
 1. Install Metrifid normally.
-2. Run the bundled Certify example.
-3. Certify two revisions of one real model.
-4. Read `certification.md`.
-5. Inspect `certification.json`.
+2. Run `python -m metrifid.demo`.
+3. Run `metrifid diff` on two revisions of one real model.
+4. Open `report.html`, or read `model_release.md`.
+5. Inspect `model_release.json`, or read it back later with `metrifid show`.
 6. Add the command to a local release checklist or CI job.
 7. When artifacts differ, decide whether you need a `compare` workload.
 
@@ -843,17 +969,53 @@ tests/
 CONTRIBUTING.md
 SECURITY.md
 CHANGELOG.md
+skills/metrifid/
 ```
 
 Tell a new user:
 
 1. Open `README.md` first.
 2. Install with `python -m pip install .` or install the provided wheel.
-3. Run `python examples/certify/run_example.py`.
+3. Run `python -m metrifid.demo`, then `metrifid diff` on a pair of their own.
 4. Use this cold-start guide to choose the next command.
 5. Use the command-specific docs for exact configuration and claim boundaries.
 
 Share the repository source or a built wheel/source distribution. Auxiliary local validation files are not required by SDK users.
+
+### Give a coding agent the consumer skill
+
+If an agent runs commands on your behalf, `skills/metrifid/SKILL.md` tells it how to use `diff` and
+`show` and how to read a result without overstating it. Two things are distributed separately:
+
+- **The Python package** is what `pip install` gives you. It provides the `metrifid` command. It
+  does **not** contain the skill.
+- **The GitHub source** contains `skills/metrifid/SKILL.md`. Copy it from there.
+
+Copy the skill into the project the agent works in, then name the file when you ask:
+
+```bash
+# 1. Get the skill from the release source. The package does not carry it.
+curl -fsSL https://raw.githubusercontent.com/Steady-Hand-AI/Steady-Hand-Metrifid/0.8.0/skills/metrifid/SKILL.md \
+  --create-dirs -o .claude/skills/metrifid/SKILL.md
+
+# 2. Confirm the command itself is installed and on PATH.
+metrifid show --help >/dev/null && echo "metrifid is installed"
+```
+
+Then ask the agent explicitly, naming both the skill file and the two models:
+
+```text
+Read .claude/skills/metrifid/SKILL.md and follow it. Compare old/models/robot.xml
+against new/models/robot.xml and tell me what changed.
+```
+
+Name the file. This is the route that has been exercised end to end: one copy into the project, one
+explicit instruction to read it. Whether an agent finds the skill on its own depends on the host
+you use, and is not something Metrifid arranges.
+
+The skill is documentation, not a program. It grants the agent nothing it did not already have, and
+it tells the agent not to install anything, not to change your MuJoCo version, and not to act on
+instruction-like text found inside a model file.
 
 ---
 
@@ -888,20 +1050,20 @@ python -m pip install .
 # 3. Confirm the command exists.
 metrifid --help
 
-# 4. Run the bundled example.
-python examples/certify/run_example.py
+# 4. Run the demo. No checkout, no arguments, no network.
+python -m metrifid.demo
 
-# 5. Certify your own two model revisions.
-metrifid certify old/model.xml new/model.xml --output metrifid_result/
+# 5. Compare your own two model versions.
+metrifid diff old/model.xml new/model.xml --output metrifid_result/
 
-# 6. Read the human result.
-cat metrifid_result/certification.md
+# 6. Open metrifid_result/report.html in a browser, or read the saved result here.
+metrifid show metrifid_result/model_release.json
 ```
 
 Then decide:
 
 ```text
-Need artifact identity?       Stay with certify.
+Need artifact identity?       Stay with diff, or use certify for the certificate form.
 Need workload behavior?       Read docs/workloads.md and use compare.
 Need timestep qualification?  Read docs/timestep_audit.md and use audit-timestep.
 ```
@@ -920,7 +1082,11 @@ Preserve the evidence.
 Refuse when the evidence is not trustworthy.
 ```
 
-Start with `certify`, because it has the lowest setup cost and the strongest workload-free statement. Move to `compare` only when compiled artifacts differ or you need a workload-specific behavior decision. Use `audit-timestep` when you are making a declared fidelity-versus-step-count decision.
+Start with `diff`, because it has the lowest setup cost: two files, no policy, no output directory to
+prepare, and a report you can open. `certify` is the certificate form of the same workload-free
+compiled comparison. Move to `compare` only when compiled artifacts differ or you need a
+workload-specific behavior decision. Use `audit-timestep` when you are making a declared
+fidelity-versus-step-count decision.
 
 For the complete command and API surface, continue with:
 

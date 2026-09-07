@@ -21,6 +21,17 @@ metrifid review-runtime runtime_review.json
 metrifid run-runtime-review runtime_review_run.json
 ```
 
+Two further routes answer the same static model-release question without a policy file. They are
+entry points to `review-model`, not additional decisions:
+
+```bash
+metrifid diff BASELINE_MJCF CANDIDATE_MJCF \
+  [--baseline-root BASELINE_ROOT] [--candidate-root CANDIDATE_ROOT] \
+  [--output OUTPUT_DIRECTORY] [--json] [--full]
+
+metrifid show RECEIPT [--json] [--full]
+```
+
 ## Runtime support
 
 The five model commands — `certify`, `review-model`, `compare`, `audit-timestep` and
@@ -32,6 +43,8 @@ and NumPy 1.26 or newer with no upper bound. Exact stable profiles `3.9.0` throu
 retained-validated. A later stable runtime is admitted only by measured operation capabilities and
 is labeled capability-compatible rather than validated. The runtime does not reject an interpreter
 implementation by name. Native Windows is unsupported; use WSL.
+
+`diff` reaches the same gate: it runs the `review-model` lifecycle and compiles both models in the installed process. `show` does not — it parses and validates a saved receipt, so it needs no native runtime at all.
 
 Runtime admission and claim coverage are separate. Missing call-graph capabilities refuse with
 `MUJOCO_RUNTIME_CAPABILITY_MISSING`. A runtime may be admitted while `review-model` or a dynamic
@@ -73,12 +86,20 @@ the native runtime gate.
 | `20` | `review-runtime`, `run-runtime-review` | `INSUFFICIENT_EVIDENCE` — repeatability, solver, contact-topology, asymptotic or full-prefix evidence is insufficient |
 | `30` | `review-runtime`, `run-runtime-review` | `UNRESOLVED_NEAR_BOUNDARY` — complete evidence remains too close to a declared boundary to decide |
 | `40` | `review-runtime`, `run-runtime-review` | `OUTSIDE_DECLARED_MIGRATION_ENVELOPE` — a decisive witness places the candidate outside the declared migration envelope |
+| `0` | `diff` | `NO_COMPILED_CHANGE` — the complete MJBs matched |
+| `40` | `diff` | `REVIEW_REQUIRED` — the compiled artifacts differ |
+| `0` | `show` | the receipt was read; the outcome it recorded is reported, not replaced |
 | `64` | any | invalid invocation, input or output |
 | `70` | any | internal failure |
 
 Exit `64` is an operational refusal and exit `70` is an internal failure. Both mean no completed
 decision was reached, and for either the CLI writes one strict `metrifid.operational_failure` JSON
-document to stderr naming its stage and reason code.
+document to stderr naming its stage and reason code. For `diff` and `show`, a recognized request
+that asked for `--json` also receives one `metrifid.result` document on stdout carrying the same
+reason and exit code, so a caller parsing stdout can read an ordinary usage error too. That holds
+for exit `64` and for the bounded failures the reader itself raises. An unexpected error caught at
+the CLI's defensive boundary exits `70` and writes only the `metrifid.operational_failure` document
+to stderr, so empty stdout must not be read as a parse failure — check the exit code first.
 
 ## Statuses
 
@@ -113,6 +134,11 @@ run-runtime-review
                   OUTSIDE_DECLARED_MIGRATION_ENVELOPE
 ```
 
+`diff` reports `review-model` statuses, because it is that review run with a generated empty
+policy: a compiled change is undeclared against an empty policy, so it is `REVIEW_REQUIRED`.
+`show` has no status of its own. It reports the status the receipt already recorded, and its own
+exit `0` means only that the receipt was read.
+
 `certify` statuses are its own. They are never mixed into the comparison status registry, and
 `certify` never emits a comparison status or exit.
 
@@ -131,7 +157,9 @@ its integrity from re-rendering byte-exactly from its canonical receipt rather t
 of its own. Retained Runtime Review process members — the canonical `command.json`, the raw
 `stdout.txt` and `stderr.txt` streams, and the plain `exit_code.txt` — carry no self-hash field, and
 an admitted input configuration is bound by digests recorded in the receipt rather than by a digest
-of its own.
+of its own. The `report.html` a `diff` run publishes is in the same category and weaker still: it is
+a rendering for a reader, carries no self-hash, and a run that completes without it is still a
+complete result.
 
 | Schema identifier | Published as |
 | --- | --- |
@@ -151,6 +179,7 @@ of its own.
 | `metrifid.runtime_review.native_profile_identity`, versions `1` and `2` | one published identity document per measured profile |
 | `metrifid.runtime_review.integration_state_sentinel`, version `1` | inside a schema-version-2 profile identity |
 | `metrifid.runtime_review_process_command`, version `1` | `command.json` in each retained process directory |
+| `metrifid.result`, version `1` | stdout from `diff --json` or `show --json` |
 
 Runtime Review keeps schema version `1` as the immutable historical route and validates it, while a
 new run emits version `2`: `run-runtime-review` generates its downstream review configuration at
@@ -159,7 +188,49 @@ version `2`. Receipt validation admits versions `1` and `2`; only a version-2 re
 validates the `profiles` member, and a version-1 published tree contains no profile-identity members
 at all.
 
-Output-root semantics differ by command, so no single rule covers all seven.
+### The `metrifid.result` reading document
+
+`diff --json` and `show --json` write one `metrifid.result` document to stdout. It is a reading of
+a receipt, not a second decision: it is not self-hashed, nothing is published from it, and the
+canonical receipt beside it remains the record. It carries exactly fourteen members: `schema`,
+`schema_version`, `command`, `observation`, `compiled_comparison`, `evaluation`, `runtime`,
+`inputs`, `findings`, `finding_count`, `limitations`, `artifacts`, `truncated` and `problems`.
+
+`evaluation` reports the status and exit code the producing run recorded. For `show` this is the
+distinction that matters: the process exit is `0` because the receipt was read, while `evaluation`
+may record `REVIEW_REQUIRED` and exit `40`. Read the evaluation, not the process exit, to learn
+what the comparison decided.
+
+The default emission is the complete document, bounded at 262144 bytes with the trailing newline
+included. Only a document that would exceed that ceiling is replaced by a summary of itself with
+`truncated` set to `true`; `finding_count` still reports how many findings there were, and the
+receipt identity is kept. `--full` lifts the ceiling, so a result large enough to be summarised
+still carries every finding, both source inventories and every producer omission row. For a result
+that fits, `--json` and `--json --full` produce the same bytes.
+
+`artifacts` carries what this run knows about its own output: the paths `output_dir`, `receipt`,
+`markdown` and `html`, plus `receipt_sha256`, which is the digest the receipt records for itself
+and not a file of its own. A member is `null` when this run has no value for it, which is not the
+same as the file being absent. `show` is the clear case: reading a saved receipt sets `receipt` and
+`receipt_sha256` and leaves `output_dir`, `markdown` and `html` `null`, because a saved read
+deliberately looks at the receipt alone and never inspects the files beside it. The report from the
+original run may be sitting next to that receipt, unread. Treat `null` as "not provided here", and
+look in the run directory to learn what is actually there.
+
+For a completed `diff` the field is narrower. `html` carries the published report's path, or is
+`null` when the run could not publish one or could not verify that its path still names the
+directory the report went into; in that case a limitation in the `presentation` category records
+that there is no verified report path. That limitation is in the document, but not necessarily in
+what you read: a default emission that exceeded the ceiling replaces every limitation with the
+truncation notice, which is itself in the `presentation` category. Use `--full`, or check
+`truncated`, before concluding anything from that category. The run never deletes a report it has already committed
+through the directory descriptor; it withholds the path claim, not the file. Either way the report is presentation only:
+the comparison keeps its exit code and its canonical bytes, and a `null` `html` never means the
+comparison failed.
+
+Output-root semantics differ by command, so no single rule covers all seven expert commands. The
+`diff` route follows `review-model` when `--output` is given; without `--output` it allocates a new
+private run directory under `~/.metrifid/runs` instead. `show` writes nothing at all.
 
 | Command | Declared output root | Publication |
 | --- | --- | --- |
@@ -187,7 +258,7 @@ already-published diagnostic evidence while still refusing the operation.
 A success exit, the complete command-specific output tree, and that command's own final path and byte
 verification are all required before treating a result as published.
 
-Model traversal and result publication are descriptor-confined: replacing an admitted path cannot redirect reads, writes, publication, or cleanup. Certify and Compare refuse output equal to or below
+Model traversal and result publication are descriptor-confined: replacing an admitted path cannot redirect reads, writes, publication, or cleanup. Certify, Compare and `diff` refuse output equal to or below
 either model root. State and actions NPZ admission reads from one no-follow descriptor and enforces
 the raw-byte bound while reading, before ZIP preflight or array parsing.
 
@@ -249,9 +320,11 @@ The supported programmatic **execution** surface is documented in [`docs/sdk.md`
 `metrifid.compare.compare_configuration_file`, `metrifid.timestep_audit.audit_configuration_file`,
 `metrifid.workload_qualification.qualify_configuration_file`,
 `metrifid.runtime_review.review_runtime_configuration_file`, and
-`metrifid.runtime_review.run_runtime_review_configuration_file`. Each of the seven CLI commands is a
-thin wrapper over one of those functions. The table below covers the supporting value types and
-helpers.
+`metrifid.runtime_review.run_runtime_review_configuration_file`. Each of the seven expert CLI
+commands is a thin wrapper over one of those functions. The `diff` and `show` routes add no eighth
+decision function: `diff` runs the same model-release review with a generated empty policy, and
+`show` only reads a receipt that review already published. The table below covers the supporting
+value types and helpers.
 
 ### `metrifid.runtime_review`
 

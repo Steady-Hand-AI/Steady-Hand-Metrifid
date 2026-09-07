@@ -1,23 +1,26 @@
 """A self-contained first-use demonstration that runs from a wheel installation alone.
 
 ``python -m metrifid.demo`` needs no repository checkout, no arguments, no network access, and no
-packaged model assets. It writes two tiny MJCF models into a temporary directory and runs the two
-certification outcomes a new user most needs to see:
+packaged model assets. It writes three tiny MJCF models into a temporary directory and runs the two
+comparisons a new user most needs to see, through the same ``diff`` operation the command line
+uses:
 
-* two source-different files that compile to the same artifact certify, exit 0;
+* two source-different files that compile to the same model, exit 0;
 * one changed mass compiles differently, exit 40.
 
-Both published receipts are then reloaded through the public raw loader, which is the same strict
-admission path an independent reader would use.
+The models are temporary; the results are not. Each comparison retains its receipt, Markdown and
+offline report through the ordinary retained-run allocator, and the demonstration prints those real
+paths so they can be opened and read afterwards.
 """
 
 from __future__ import annotations
 
 import sys
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 
-from .certify import certify_models, load_and_validate_certification_receipt
+from .result import run_diff
 
 __all__ = ["main"]
 
@@ -54,8 +57,8 @@ _CHANGED_MJCF = """<mujoco model="demo">
 </mujoco>
 """
 
-_EQUIVALENT_STATUS = "CERTIFIED_COMPILED_EQUIVALENCE"
-_CHANGED_STATUS = "NOT_CERTIFIED_COMPILED_DIFFERS"
+_IDENTICAL_EXIT = 0
+_DIFFERENT_EXIT = 40
 
 
 def _write_model(directory: Path, text: str) -> Path:
@@ -66,75 +69,114 @@ def _write_model(directory: Path, text: str) -> Path:
     return path
 
 
-def _certify_pair(baseline: Path, candidate: Path, output: Path) -> tuple[str, Path, Path]:
-    """Certify one model pair and return its status with both published paths."""
-    result = certify_models(str(baseline), str(candidate), str(output))
-    return str(result.status), result.certification_json, result.certification_markdown
+@dataclass(frozen=True, slots=True)
+class _Comparison:
+    """One completed demonstration comparison and where its evidence was retained."""
+
+    label: str
+    exit_code: int
+    state: str
+    receipt: str | None
+    report: str | None
+    presentation: tuple[str, ...]
 
 
-def _run(workspace: Path) -> tuple[str, str, int, int]:
-    """Run both certifications inside one workspace and revalidate every published receipt.
+def _compare(label: str, baseline: Path, candidate: Path) -> _Comparison:
+    """Run one comparison through the ordinary diff operation and read what it retained."""
+    outcome = run_diff(str(baseline), str(candidate))
+    document = outcome.document
+    comparison = document["compiled_comparison"]
+    artifacts = document["artifacts"]
+    limitations = document["limitations"]
+    state = str(comparison["state"]) if isinstance(comparison, dict) else "not_established"
+    receipt = artifacts.get("receipt") if isinstance(artifacts, dict) else None
+    report = artifacts.get("html") if isinstance(artifacts, dict) else None
+    warnings = (
+        tuple(
+            str(item["message"])
+            for item in limitations
+            if isinstance(item, dict) and item.get("category") == "presentation"
+        )
+        if isinstance(limitations, list)
+        else ()
+    )
+    return _Comparison(
+        label,
+        outcome.exit_code,
+        state,
+        receipt if isinstance(receipt, str) else None,
+        report if isinstance(report, str) else None,
+        warnings,
+    )
 
-    Returns:
-        The equivalent status, the changed status, the number of receipts revalidated through the
-        public raw loader, and the number of Markdown renderings found on disk.
-    """
+
+def _run(workspace: Path) -> tuple[_Comparison, _Comparison]:
+    """Write the three models into one temporary workspace and compare both pairs."""
     baseline = _write_model(workspace / "baseline", _BASELINE_MJCF)
     equivalent = _write_model(workspace / "equivalent", _EQUIVALENT_MJCF)
     changed = _write_model(workspace / "changed", _CHANGED_MJCF)
-
-    equivalent_status, equivalent_json, equivalent_markdown = _certify_pair(
-        baseline, equivalent, workspace / "out_equivalent"
+    return (
+        _compare("different source, same compiled model", baseline, equivalent),
+        _compare("one changed mass", baseline, changed),
     )
-    changed_status = _CHANGED_STATUS
-    try:
-        changed_status, changed_json, changed_markdown = _certify_pair(
-            baseline, changed, workspace / "out_changed"
-        )
-    except Exception:
-        # A differing pair is a completed decision, not an error, so any exception here is real.
-        raise
 
-    validated = 0
-    for payload in (equivalent_json, changed_json):
-        load_and_validate_certification_receipt(payload.read_bytes())
-        validated += 1
-    markdown = sum(1 for path in (equivalent_markdown, changed_markdown) if path.is_file())
-    return equivalent_status, changed_status, validated, markdown
+
+def _problems(equivalent: _Comparison, changed: _Comparison) -> list[str]:
+    """Return every expectation the demonstration did not meet."""
+    problems: list[str] = []
+    for comparison, expected, state in (
+        (equivalent, _IDENTICAL_EXIT, "identical"),
+        (changed, _DIFFERENT_EXIT, "different"),
+    ):
+        if comparison.exit_code != expected:
+            problems.append(
+                f"{comparison.label} exited {comparison.exit_code}, expected {expected}"
+            )
+        elif comparison.state != state:
+            problems.append(f"{comparison.label} reported {comparison.state}, expected {state}")
+        elif comparison.receipt is None:
+            problems.append(f"{comparison.label} retained no receipt")
+    return problems
+
+
+def _describe(comparison: _Comparison) -> None:
+    """Print one comparison's outcome and the evidence it actually retained."""
+    print(f"{comparison.label:38s}: exit {comparison.exit_code} ({comparison.state})")
+    print(f"{'  receipt':38s}: {comparison.receipt}")
+    if comparison.report is not None:
+        print(f"{'  report':38s}: {comparison.report}")
+    else:
+        print(f"{'  report':38s}: not written")
+    for warning in comparison.presentation:
+        print(f"{'  note':38s}: {warning}")
 
 
 def main() -> int:
     """Run the bundled demonstration and report whether every expectation held.
 
+    The temporary models are removed when the workspace is discarded. The retained results are
+    not: their printed paths stay readable afterwards with ``metrifid show``.
+
     Returns:
-        ``0`` when both certifications produced their expected status, both receipts revalidated,
-        and both Markdown renderings exist; a nonzero code otherwise.
+        ``0`` when the equivalent pair exits 0 and the changed pair exits 40, and each retained a
+        receipt; a nonzero code otherwise.
     """
     try:
         with tempfile.TemporaryDirectory(prefix="metrifid-demo-") as raw:
             # resolve(): the platform temporary directory is often reached through a symbolic
-            # link, and Metrifid refuses to publish through one.
-            workspace = Path(raw).resolve()
-            equivalent_status, changed_status, validated, markdown = _run(workspace)
+            # link, and Metrifid refuses to admit a model root through one.
+            equivalent, changed = _run(Path(raw).resolve())
     except Exception as exc:
         print(f"metrifid demo failed: {type(exc).__name__}: {exc}", file=sys.stderr)
         return 1
 
-    problems: list[str] = []
-    if equivalent_status != _EQUIVALENT_STATUS:
-        problems.append(f"equivalent pair reported {equivalent_status}")
-    if changed_status != _CHANGED_STATUS:
-        problems.append(f"changed pair reported {changed_status}")
-    if validated != 2:
-        problems.append(f"revalidated {validated} receipts, expected 2")
-    if markdown != 2:
-        problems.append(f"found {markdown} Markdown renderings, expected 2")
+    problems = _problems(equivalent, changed)
     if problems:
         print(f"metrifid demo failed: {'; '.join(problems)}", file=sys.stderr)
         return 1
 
-    print(f"different source, same compiled model : {equivalent_status}")
-    print(f"one changed mass                      : {changed_status}")
+    _describe(equivalent)
+    _describe(changed)
     print("Metrifid demo passed")
     return 0
 

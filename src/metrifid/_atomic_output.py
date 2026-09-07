@@ -150,6 +150,134 @@ def prepare_paired_output_directory(path: Path, names: PairedOutputNames) -> Pai
         raise
 
 
+def open_owned_subdirectory(parent_fd: int, child_name: str, *, mode: int) -> int:
+    """Open one child directory of a bound parent, creating it privately when it is absent.
+
+    Admission, creation and opening all happen relative to the retained parent descriptor, so a
+    directory substituted after it was admitted cannot redirect the next step onto another tree.
+    An existing child must already be a real directory; a link or a file in its place is refused.
+
+    Args:
+        parent_fd: A descriptor for the already-bound parent directory.
+        child_name: One plain file name directly beneath that parent.
+        mode: Permission bits used when the child has to be created.
+
+    Returns:
+        An owned descriptor for the child, which the caller closes.
+
+    Raises:
+        ComparisonOperationError: The child is not a real directory, or could not be created,
+            observed or opened.
+    """
+    if not child_name or "/" in child_name or child_name in {".", ".."}:
+        raise ValueError("output child name must be a plain file name")
+    metadata = _admit_owned_subdirectory(parent_fd, child_name, mode)
+    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
+        raise refuse(
+            OperationalReasonCode.OUTPUT_PATH_INVALID, issue="output_path_not_real_directory"
+        )
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = -1
+    try:
+        descriptor = os.open(child_name, flags, dir_fd=parent_fd)
+        bound = os.fstat(descriptor)
+    except OSError as exc:
+        if descriptor >= 0:
+            os.close(descriptor)
+        raise refuse(
+            OperationalReasonCode.OUTPUT_PATH_INVALID,
+            issue="output_directory_bind_failed",
+            exception_type=type(exc).__name__,
+        ) from exc
+    if (metadata.st_dev, metadata.st_ino) != (bound.st_dev, bound.st_ino):
+        os.close(descriptor)
+        raise refuse(OperationalReasonCode.OUTPUT_PATH_INVALID, issue="output_path_replaced")
+    return descriptor
+
+
+def _admit_owned_subdirectory(parent_fd: int, child_name: str, mode: int) -> os.stat_result:
+    """Observe one child of a bound parent, creating it once when it is absent."""
+    for creating in (True, False):
+        try:
+            return os.stat(child_name, dir_fd=parent_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            if not creating:
+                raise refuse(
+                    OperationalReasonCode.OUTPUT_PATH_INVALID, issue="output_directory_missing"
+                ) from None
+        except OSError as exc:
+            raise refuse(
+                OperationalReasonCode.OUTPUT_PATH_INVALID,
+                issue="output_path_stat_failed",
+                exception_type=type(exc).__name__,
+            ) from exc
+        try:
+            return _create_owned_child(parent_fd, child_name, mode)
+        except FileExistsError:
+            # Another process created the shared ancestor first; observe what is there now.
+            continue
+    raise refuse(OperationalReasonCode.OUTPUT_PATH_INVALID, issue="output_directory_missing")
+
+
+def create_owned_paired_output(
+    parent_fd: int, parent_path: Path, child_name: str, names: PairedOutputNames, *, mode: int
+) -> PairedOutputDirectory:
+    """Create one new child of a parent the caller already holds, and bind it by descriptor.
+
+    Nothing here resolves a pathname: the child is created at the supplied descriptor, so a
+    directory substituted anywhere above it cannot redirect the creation. The child is created
+    exclusively, so a name already in use is reported rather than adopted, and the object finally
+    bound is re-verified against the metadata admitted immediately after creation, so a
+    replacement between admission and binding is refused.
+
+    The limit of that: POSIX offers no way to create a directory and receive its descriptor in one
+    step, so the instant between creating the child and observing it cannot be closed. Anyone able
+    to write inside the parent could substitute the new name in that instant and be bound instead.
+    What excludes it here is the parent, not this function: callers create the retention root
+    private to the user, so only that same user, or root, can reach inside it.
+
+    Args:
+        parent_fd: A descriptor for the bound directory to create the child in.
+        parent_path: That directory's public path, used only to name the result.
+        child_name: One plain new file name.
+        names: The two final file names the caller will publish together.
+        mode: Permission bits for the newly created directory.
+
+    Returns:
+        The bound paired output directory.
+
+    Raises:
+        FileExistsError: The name is already taken, so the caller may retry with a fresh one.
+        ComparisonOperationError: The parent or the created child could not be bound.
+    """
+    if not child_name or "/" in child_name or child_name in {".", ".."}:
+        raise ValueError("output child name must be a plain file name")
+    metadata = _create_owned_child(parent_fd, child_name, mode)
+    return _bind_paired_child(parent_fd, parent_path / child_name, child_name, names, metadata)
+
+
+def _create_owned_child(parent_fd: int, child_name: str, mode: int) -> os.stat_result:
+    """Create one child at the bound parent, letting only a name collision escape untyped."""
+    try:
+        os.mkdir(child_name, mode=mode, dir_fd=parent_fd)
+    except FileExistsError:
+        raise
+    except OSError as exc:
+        raise refuse(
+            OperationalReasonCode.OUTPUT_PATH_INVALID,
+            issue="output_directory_create_failed",
+            exception_type=type(exc).__name__,
+        ) from exc
+    try:
+        return os.stat(child_name, dir_fd=parent_fd, follow_symlinks=False)
+    except OSError as exc:
+        raise refuse(
+            OperationalReasonCode.OUTPUT_PATH_INVALID,
+            issue="output_path_stat_failed",
+            exception_type=type(exc).__name__,
+        ) from exc
+
+
 def _adopt_paired_output_descriptor(
     path: Path, names: PairedOutputNames, descriptor: int
 ) -> PairedOutputDirectory:
@@ -431,6 +559,8 @@ __all__ = [
     "PairedOutputDirectory",
     "PairedOutputNames",
     "cleanup_paired_output_after_failure",
+    "create_owned_paired_output",
+    "open_owned_subdirectory",
     "prepare_paired_output_directory",
     "publish_paired_results",
     "verify_paired_output_path_unchanged",
