@@ -19,7 +19,7 @@ Project links: [repository](https://github.com/Steady-Hand-AI/Steady-Hand-Metrif
 
 ## Start with the change you made
 
-You do not need to choose between seven commands to get an answer. Two things change in practice —
+You do not need to pick a command from a list to get an answer. Two things change in practice —
 what you model, and what you run it on — and each has one place to start.
 
 ### Your model or asset changed
@@ -40,6 +40,10 @@ Certify compiles both closures and compares every byte MuJoCo emits. It runs no 
 initial state, actions, or tolerances, and never steps the simulation. **Certify makes no
 behavioral-equivalence claim**: it tells you the compiled artifact differs, not that the robot will
 behave differently.
+
+`metrifid diff old/robot.xml new/robot.xml` answers the same compiled-identity question with no
+`--output` and no policy file, and retains a receipt, a Markdown summary and an offline HTML report
+under `~/.metrifid/runs/`. It is the shortest way in; [First use](#first-use) below starts there.
 
 Exit 40 is not a crash. A completed exit 20, 30, or 40 can be a referee decision — Metrifid finished
 its work and is reporting what it found.
@@ -85,28 +89,96 @@ python -m metrifid.demo
 metrifid --help
 ```
 
-`python -m metrifid.demo` needs no checkout, no arguments, and no network. It certifies one
-source-different but compiled-identical pair (exit 0) and one physically changed pair (exit 40),
-revalidates both published receipts, and prints `Metrifid demo passed`.
+`python -m metrifid.demo` needs no checkout, no arguments, and no network. It writes three tiny
+models into a temporary directory, compares two pairs, retains the evidence for each, prints where
+that evidence went, and ends with `Metrifid demo passed`:
 
-Then certify two of your own model revisions:
+```text
+different source, same compiled model : exit 0 (identical)
+  receipt                             : ~/.metrifid/runs/<run>/model_release.json
+  report                              : ~/.metrifid/runs/<run>/report.html
+one changed mass                      : exit 40 (different)
+  receipt                             : ~/.metrifid/runs/<run>/model_release.json
+  report                              : ~/.metrifid/runs/<run>/report.html
+Metrifid demo passed
+```
+
+The demo models are temporary. The results are not: those printed paths stay on disk after the
+command exits, and stay readable.
+
+Then compare two of your own model versions:
 
 ```bash
-metrifid certify old/robot.xml new/robot.xml --output out/
+metrifid diff old/robot.xml new/robot.xml --output out/
 ```
+
+`diff` compiles both versions with one recorded MuJoCo runtime, compares the compiled artifacts
+byte for byte, and retains three files: `model_release.json`, `model_release.md` and
+`report.html`. With no `--output` it retains the run under `~/.metrifid/runs/<run>/` instead.
+`--output DIR` needs a directory that is absent or empty and that lies outside both model roots.
+Its parent must already exist: `metrifid` creates the final directory, not the path leading to it.
+
+| Exit | Meaning |
+| ---: | --- |
+| `0` | the compiled artifacts are byte-identical |
+| `40` | the compiled artifacts differ |
+| `64` | the request was refused: a bad path, an unusable output directory, an unreadable receipt |
+| `70` | internal failure |
+
+Exit 0 and exit 40 are both completed comparisons. Only 64 and 70 mean no comparison was made, so
+a script should reject those two rather than every nonzero exit:
+
+```bash
+metrifid diff old/robot.xml new/robot.xml --output out/
+exit_code=$?
+if [ "$exit_code" -ne 0 ] && [ "$exit_code" -ne 40 ]; then
+  echo "metrifid did not complete the comparison (exit $exit_code)" >&2
+  exit "$exit_code"
+fi
+metrifid show out/model_release.json   # or open out/report.html
+```
+
+Each model root is measured whole. A root defaults to the directory holding the entrypoint, so
+every file beside the model is admitted, not only the file you named. When both versions draw on
+assets in a directory above them, name the wider root yourself:
+
+```bash
+metrifid diff old/models/robot.xml new/models/robot.xml \
+  --baseline-root old/ --candidate-root new/ --output out/
+```
+
+The first lines of a real run on a differing pair:
+
+```text
+Compiled model changed.
+71 serialized byte(s) differ, first at offset 1692.
+Recorded evaluation: REVIEW_REQUIRED. The run that produced it exited 40.
+
+Compared
+  baseline   .../examples/certify/equivalent/baseline.xml
+             root .../examples/certify/equivalent  2 file(s) measured
+  candidate  .../examples/certify/changed.xml
+             root .../examples/certify  5 file(s) measured
+  every file under each root is measured, not only the entrypoint
+  the two roots differ: the measured file counts are not a change list
+
+Named changes (2)
+  body link mass: 1.5 -> 2.0
+```
+
+`metrifid show RECEIPT` reads a retained result back afterwards, including a `certification.json`
+written by `certify`. It imports no MuJoCo and no NumPy, so a retained result stays readable on a
+machine that has neither. Its exit 0 means the receipt was read, not that the two models matched:
+the recorded status is reported inside the result.
+
+Three limits travel with every comparison, and the result states them. It is bound to one recorded
+MuJoCo version, Python build and platform, and says nothing about any other. Its coverage can be
+unknown, because the field producer omits some compiled members and a compiled object carrying no
+name cannot be attributed to a named object; unknown coverage is neither zero coverage nor full
+coverage. And it is not approval, sign-off, or a safety or correctness claim.
 
 Working from a source checkout instead? `python -m pip install .` installs the same package;
 integration, security, receipt, and release evidence must run from a noneditable installation.
-
-```text
-exit 0   CERTIFIED_COMPILED_EQUIVALENCE   every serialized byte matched
-exit 40  NOT_CERTIFIED_COMPILED_DIFFERS   at least one byte differed
-```
-
-It runs no workload, needs no initial state, no actions and no tolerances, and never steps the
-simulation.
-
-
 
 ## Use Metrifid in GitHub Actions
 
@@ -116,7 +188,7 @@ out the models first, then run the action:
 ```yaml
 - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 - id: certify
-  uses: Steady-Hand-AI/Steady-Hand-Metrifid@0.7.2
+  uses: Steady-Hand-AI/Steady-Hand-Metrifid@0.8.0
   with:
     baseline_mjcf: old/robot.xml
     candidate_mjcf: new/robot.xml
@@ -248,6 +320,7 @@ behavioral claim.
 | [docs/sdk.md](https://github.com/Steady-Hand-AI/Steady-Hand-Metrifid/blob/main/docs/sdk.md) | the supported programmatic execution surfaces, including `review_runtime_configuration_file` |
 | [`docs/canonicalization.md`](https://github.com/Steady-Hand-AI/Steady-Hand-Metrifid/blob/main/docs/canonicalization.md) | canonical JSON, exact numbers, self-hashing |
 | [`docs/menagerie_formatter_case.md`](https://github.com/Steady-Hand-AI/Steady-Hand-Metrifid/blob/main/docs/menagerie_formatter_case.md) | a real public case study |
+| [`skills/metrifid/SKILL.md`](https://github.com/Steady-Hand-AI/Steady-Hand-Metrifid/blob/main/skills/metrifid/SKILL.md) | the consumer skill for a coding agent — source only, not in the Python package |
 
 ## Requirements
 

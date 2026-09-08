@@ -57,7 +57,13 @@ from ..schemas import ModelClosureIdentity
 from ..version import __version__
 from ._decision import ModelReleaseDecisionRefusal, decide_model_release
 from ._markdown import render_markdown
-from ._policy import ModelReleasePolicy, load_model_release_policy
+from ._policy import (
+    MODEL_RELEASE_POLICY_SCHEMA,
+    MODEL_RELEASE_POLICY_SCHEMA_VERSION,
+    ModelReleasePolicy,
+    load_model_release_policy,
+    parse_model_release_policy,
+)
 from ._receipt import ModelReleaseResult, build_model_release_receipt
 from ._snapshot import SnapshotRefusal, build_compiled_model_snapshot
 
@@ -102,6 +108,29 @@ class _RetainedSubjects:
         self._artifacts.clear()
 
 
+def build_discovery_policy(baseline_compiled_sha256: str) -> ModelReleasePolicy:
+    """Admit the canonical empty policy that binds only one compiled baseline subject.
+
+    The document is built as bytes and handed to the ordinary policy parser, so a discovery run
+    is admitted by exactly the same bounded reader as a maintainer-supplied policy file and
+    carries the same raw and semantic identities.
+
+    Args:
+        baseline_compiled_sha256: Digest of the baseline complete MJB just serialized.
+
+    Returns:
+        The admitted policy declaring no rules and no candidate subject.
+    """
+    document: dict[str, CanonicalValue] = {
+        "schema": MODEL_RELEASE_POLICY_SCHEMA,
+        "schema_version": MODEL_RELEASE_POLICY_SCHEMA_VERSION,
+        "baseline_compiled_sha256": baseline_compiled_sha256,
+        "candidate_compiled_sha256": None,
+        "rules": [],
+    }
+    return parse_model_release_policy(canonical_json_bytes(document))
+
+
 def review_model_release(
     baseline_mjcf: str,
     candidate_mjcf: str,
@@ -112,32 +141,108 @@ def review_model_release(
     candidate_root: str | None = None,
 ) -> ModelReleaseResult:
     """Classify every compiled-model change under one admitted maintainer policy."""
+    return _run_model_release(
+        baseline_mjcf,
+        candidate_mjcf,
+        output_directory,
+        policy_path=policy_path,
+        discover=False,
+        baseline_root=baseline_root,
+        candidate_root=candidate_root,
+    )
+
+
+def discover_model_release(
+    baseline_mjcf: str,
+    candidate_mjcf: str,
+    output: str | PairedOutputDirectory,
+    *,
+    baseline_root: str | None = None,
+    candidate_root: str | None = None,
+) -> ModelReleaseResult:
+    """Classify every compiled-model change with no declared policy to satisfy.
+
+    The generated policy binds the compiled baseline and declares nothing, so every observed
+    change stays undeclared and the run reports what changed rather than whether it was allowed.
+
+    Args:
+        baseline_mjcf: Path to the baseline MJCF entrypoint.
+        candidate_mjcf: Path to the candidate MJCF entrypoint.
+        output: A directory to publish into, or one already-bound output this run then owns.
+        baseline_root: Explicit baseline model root.
+        candidate_root: Explicit candidate model root.
+
+    Returns:
+        The completed static model-release decision and its two published files.
+    """
+    return _run_model_release(
+        baseline_mjcf,
+        candidate_mjcf,
+        output,
+        policy_path=None,
+        discover=True,
+        baseline_root=baseline_root,
+        candidate_root=candidate_root,
+    )
+
+
+def _run_model_release(
+    baseline_mjcf: str,
+    candidate_mjcf: str,
+    output: str | PairedOutputDirectory,
+    *,
+    policy_path: str | None,
+    discover: bool,
+    baseline_root: str | None,
+    candidate_root: str | None,
+) -> ModelReleaseResult:
+    """Run one review under a supplied policy file, or under a generated empty policy.
+
+    Running without a declared policy is a decision the caller makes explicitly. It is never
+    inferred from a missing policy path, so a caller that meant to supply one and supplied
+    nothing is still refused exactly as before rather than silently evaluated against nothing.
+
+    A directory prepared here is closed here. One the caller already bound outlives this call, so
+    the caller can publish its own presentation into the same bound object before closing it.
+    """
     tool = OperationalToolObservation(
         __version__, "VERIFIED_INSTALLED_DISTRIBUTION", installed_distribution_sha256()
     )
-    published: PairedOutputDirectory | None = None
+    # An output bound by the caller is owned from here on, so every failure below releases it
+    # through the same path a directory prepared here would take.
+    supplied = output if isinstance(output, PairedOutputDirectory) else None
+    published: PairedOutputDirectory | None = supplied
     policy: ModelReleasePolicy | None = None
     try:
-        try:
-            policy = load_model_release_policy(policy_path)
-        except (JsonAdmissionError, TypeError, ValueError) as exc:
-            raise _policy_failure(tool, exc) from exc
+        if not discover:
+            try:
+                policy = load_model_release_policy(cast("str", policy_path))
+            except (JsonAdmissionError, OSError, TypeError, ValueError) as exc:
+                raise _policy_failure(tool, exc) from exc
         runtime_admission = require_supported_runtime(MujocoClaimSurface.STATIC_MODEL_REVIEW)
         baseline_target = resolve_entrypoint(baseline_mjcf, baseline_root, "baseline")
         candidate_target = resolve_entrypoint(candidate_mjcf, candidate_root, "candidate")
-        output_path = Path(output_directory)
-        _require_output_outside_model_roots(
-            output_path, (baseline_target.model_root, candidate_target.model_root)
-        )
-        published = prepare_paired_output_directory(output_path, MODEL_RELEASE_OUTPUT_NAMES)
-        return _review(
-            tool,
-            policy,
-            baseline_target,
-            candidate_target,
-            published,
-            runtime_admission,
-        )
+        roots = (baseline_target.model_root, candidate_target.model_root)
+        if supplied is None:
+            output_path = Path(cast("str", output))
+            require_output_outside_model_roots(output_path, roots)
+            published = prepare_paired_output_directory(output_path, MODEL_RELEASE_OUTPUT_NAMES)
+            bound = published
+        else:
+            require_output_outside_model_roots(supplied.path, roots)
+            bound = supplied
+        try:
+            return _review(
+                tool,
+                policy,
+                baseline_target,
+                candidate_target,
+                bound,
+                runtime_admission,
+            )
+        finally:
+            if supplied is None:
+                bound.close()
     except ComparisonOperationError:
         cleanup_paired_output_after_failure(published)
         raise
@@ -157,7 +262,7 @@ def review_model_release(
 
 def _review(
     tool: OperationalToolObservation,
-    policy: ModelReleasePolicy,
+    policy: ModelReleasePolicy | None,
     baseline_target: ResolvedEntrypoint,
     candidate_target: ResolvedEntrypoint,
     published: PairedOutputDirectory,
@@ -184,6 +289,11 @@ def _review(
                 runtime_admission,
             )
             subjects.adopt(baseline)
+            # A discovery run has no maintainer policy to admit before this point: the document it
+            # is decided against binds the baseline compiled artifact that has just been retained.
+            effective_policy = (
+                build_discovery_policy(baseline.serialized.mjb_sha256) if policy is None else policy
+            )
             runtime = build_certify_runtime_identity(baseline.serialized.header_words)
             candidate_snapshot = stack.enter_context(
                 create_model_closure_snapshot(
@@ -211,16 +321,16 @@ def _review(
                 runtime_admission.package_base_version,
                 runtime_admission.to_evidence(),
             )
-            _require_policy_subject(policy, baseline.serialized.mjb_sha256)
+            _require_policy_subject(effective_policy, baseline.serialized.mjb_sha256)
             decision = decide_model_release(
-                policy=policy,
+                policy=effective_policy,
                 baseline=baseline_facts,
                 candidate=candidate_facts,
                 baseline_mjb_sha256=baseline.serialized.mjb_sha256,
                 candidate_mjb_sha256=candidate.serialized.mjb_sha256,
             )
             receipt = build_model_release_receipt(
-                policy=policy,
+                policy=effective_policy,
                 decision=decision,
                 certification_receipt=certification,
                 registry_sha256=baseline_facts.registry_sha256,
@@ -256,8 +366,6 @@ def _review(
             if not succeeded:
                 retained.cleanup()
             retained.close()
-        if succeeded:
-            published.close()
         if not scratch_removed:
             shutil.rmtree(scratch, ignore_errors=True)
 
@@ -377,7 +485,7 @@ def _canonical_output_path(path: Path) -> Path | None:
         return None
 
 
-def _require_output_outside_model_roots(output: Path, roots: tuple[Path, Path]) -> None:
+def require_output_outside_model_roots(output: Path, roots: tuple[Path, Path]) -> None:
     """Refuse output canonically equal to or below either admitted model root."""
     canonical_output = _canonical_output_path(output)
     if canonical_output is None:
@@ -469,4 +577,10 @@ def _decision_refusal(
     )
 
 
-__all__ = ["MODEL_RELEASE_OUTPUT_NAMES", "review_model_release"]
+__all__ = [
+    "MODEL_RELEASE_OUTPUT_NAMES",
+    "build_discovery_policy",
+    "discover_model_release",
+    "require_output_outside_model_roots",
+    "review_model_release",
+]

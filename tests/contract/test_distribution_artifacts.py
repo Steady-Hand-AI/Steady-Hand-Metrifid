@@ -196,6 +196,28 @@ def test_the_repository_only_contract_is_not_shipped(distributions: dict[str, Pa
         assert companion in names, companion
 
 
+def test_the_consumer_skill_is_distributed_by_source_only(distributions: dict[str, Path]) -> None:
+    """The public recipe tells people to fetch the skill from GitHub, so it must not ship here.
+
+    `README.md`, `docs/getting_started.md` and `CHANGELOG.md` all state that `pip install` gives a
+    reader the command but not `skills/metrifid/SKILL.md`, and that the skill has to be copied out
+    of the repository. Today that is true only because `/skills` is absent from the sdist include
+    list, which is a silence rather than a decision. This test makes it a decision: if either
+    distribution ever starts carrying the skill, the published instructions become wrong and this
+    fails instead.
+
+    It deliberately reads only the two archives. Asserting that the skill exists beside the test
+    would contradict the very exclusion being checked: this module ships in the sdist, `skills/`
+    does not, so such an assertion fails when the shipped test runs from an extracted archive.
+    """
+    with tarfile.open(distributions["sdist"]) as archive:
+        sdist_members = {n.split("/", 1)[1] for n in archive.getnames() if "/" in n}
+    with zipfile.ZipFile(distributions["wheel"]) as archive:
+        wheel_members = set(archive.namelist())
+    assert [name for name in sdist_members if name.startswith("skills/")] == []
+    assert [name for name in wheel_members if name.startswith("skills/")] == []
+
+
 def test_direct_wheel_package_bytes_match_the_candidate_source(
     distributions: dict[str, Path],
 ) -> None:

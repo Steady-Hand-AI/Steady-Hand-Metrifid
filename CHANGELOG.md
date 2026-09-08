@@ -4,6 +4,58 @@ Notable changes to `metrifid`. Starting with `0.2.0`, release identifiers use ex
 dot-separated integer components: `MAJOR.MINOR.PATCH`. Historical development entries below
 remain as an audit trail and do not define the current release version.
 
+## 0.8.0
+
+### Added
+
+- `metrifid diff BASELINE CANDIDATE` compares two model trees directly and answers in one step. It
+  exits `0` when the two compiled artifacts are byte-identical and `40` when they differ. Every
+  completed comparison retains its evidence: the canonical receipt `model_release.json` and the
+  Markdown summary `model_release.md`, published together into `~/.metrifid/runs/<run>/` or into
+  the directory given by `--output`, with the offline HTML report `report.html` written beside them
+  afterwards.
+- `metrifid show RECEIPT` reads a retained receipt and reports what that run recorded, including
+  its status and the exit code it took. Reading needs no MuJoCo and no NumPy, so a result stays
+  readable on a machine that cannot compile the models, and after the compared files are gone.
+- The offline HTML report is a plain, self-contained page: no scripts, no remote references, and
+  no network access. It presents the same reading the terminal view shows — the `metrifid.result`
+  document built over the receipt beside it — rather than a copy of the receipt's own content: it
+  decides nothing, it does not reprint the receipt's digests or per-file inventories, and for a
+  `diff` run it names the live paths that run compared, which the receipt does not record. The
+  canonical receipt remains the complete record. Its
+  advertised path is verified against the directory the report was actually written into, both
+  before writing and before reporting; if that no longer holds, the comparison keeps its exit code
+  and its canonical bytes, the `html` artifact is `null`, and a limitation records that there is no
+  verified report path. The run never deletes a report it has already written; it withholds the
+  path claim, not the file. A report is presentation only, so this never changes a completed result.
+- A result's limitations report what bounds the explanation, not what was skipped. Each member the
+  field producer left out of the field-level report keeps its recorded reason, and a member omitted
+  because it was expanded one level below is described by its compared child fields rather than by
+  a row of its own. That bounds the field-level explanation only; the compiled-byte comparison is
+  recorded separately.
+- `--json` on either route emits one `metrifid.result` document. The default emission is the
+  complete document, bounded at 262144 bytes: only a document that would exceed that ceiling is
+  replaced by a summary of itself, marked `truncated`. `--full` lifts the ceiling, so a very large
+  result keeps every finding, both source inventories and every producer omission row.
+- `skills/metrifid/SKILL.md` documents the two routes for an agent acting on a user's behalf. It
+  ships in the GitHub source only, not in the Python package; `docs/getting_started.md` describes
+  how to copy it into a project and invoke it explicitly.
+
+### Changed
+
+- The bundled demo now performs real comparisons and retains their receipts and reports, so the
+  paths it prints lead to evidence that is still there afterwards.
+
+### Unchanged
+
+- The seven expert commands, their receipt schemas and content, the compiled comparison and policy
+  decisions, runtime admission, MuJoCo dependency resolution, and the Certify composite action all
+  behave exactly as before. `diff` and `show` are routes over the existing model-release review,
+  not a second evaluator.
+- No result is a statement about behaviour, safety, or approval. A comparison reports what the
+  compiled artifacts record for one measured runtime; it does not approve a model or clear it for
+  use.
+
 ## 0.7.2
 
 ### Added

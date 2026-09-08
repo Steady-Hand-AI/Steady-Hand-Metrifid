@@ -18,7 +18,7 @@ This is not marketing copy and does not claim more than the current implementati
 ## The accepted command surface
 
 Metrifid is a local MuJoCo assurance library and command-line tool. The accepted command surface is
-exactly these seven commands:
+exactly these seven expert commands:
 
 | Command | The question it answers |
 | --- | --- |
@@ -29,6 +29,10 @@ exactly these seven commands:
 | `audit-timestep` | Which declared larger timestep stays within the tolerances of one exact workload? |
 | `review-runtime` | May one exact native MuJoCo profile replace another, given twelve retained evidence cells? |
 | `run-runtime-review` | Create those twelve native evidence cells through two prepared profiles and decide immediately. |
+
+Two routes reach the `review-model` decision without a policy file and add no decision of their
+own: `metrifid diff` compares two model versions directly and retains the evidence, and
+`metrifid show` reads a retained receipt without compiling anything.
 
 ## What each command decides
 

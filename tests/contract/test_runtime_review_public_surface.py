@@ -56,10 +56,12 @@ EXPECTED_CLI_COMMANDS = frozenset(
         "audit-timestep",
         "certify",
         "compare",
+        "diff",
         "qualify-workload",
         "review-model",
         "review-runtime",
         "run-runtime-review",
+        "show",
     }
 )
 EXPECTED_RUNTIME_REVIEW_API = frozenset(
