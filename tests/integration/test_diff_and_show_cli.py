@@ -610,6 +610,45 @@ def test_the_installed_command_answers_a_usage_error_in_json_with_one_document(
     assert json.loads(refused.stderr)["reason"]["code"] == "INVALID_CLI_INVOCATION"
 
 
+@pytest.mark.parametrize(
+    ("arguments", "command"),
+    [(("--", "diff", "--json"), "diff"), (("--", "show", "--json"), "show")],
+)
+def test_a_leading_end_of_options_marker_is_answered_as_this_interpreter_parses_it(
+    tmp_path: Path, arguments: tuple[str, ...], command: str
+) -> None:
+    """A marker in command position is answered the way the running argparse reads it.
+
+    Python 3.12 and later consume one leading marker, so these are ordinary missing-operand usage
+    errors for a recognized command and the caller gets its result document. Python 3.11 refuses
+    the marker as an invalid command choice, so nothing was recognized and stdout stays empty.
+    Either way the operational failure is on stderr, the exit is 64, and nothing is compiled or
+    published. The installed interpreter decides which shape applies, so both are admitted here
+    and the wrong one is never accepted for the interpreter in use.
+    """
+    before = sorted(p.name for p in tmp_path.iterdir())
+    refused = _run(*arguments, home=tmp_path)
+    assert refused.returncode == 64, refused.stdout + refused.stderr
+    failure = json.loads(refused.stderr)
+    assert failure["reason"]["code"] == "INVALID_CLI_INVOCATION"
+    assert "Traceback" not in refused.stderr
+
+    if sys.version_info >= (3, 12):
+        document = json.loads(refused.stdout)
+        assert document["schema"] == "metrifid.result"
+        assert document["command"]["name"] == command
+        assert document["command"]["exit_code"] == 64
+        assert document["observation"] == "none"
+        assert document["compiled_comparison"]["state"] == "not_established"
+        assert document["problems"][0]["code"] == "INVALID_CLI_INVOCATION"
+    else:
+        # The parser never recognized a command, so nothing may be promised on stdout.
+        assert refused.stdout == "", refused.stdout
+
+    # No comparison was dispatched and no run directory was created under the isolated home.
+    assert sorted(p.name for p in tmp_path.iterdir()) == before
+
+
 def test_a_handled_read_refusal_in_json_mode_also_returns_one_document(tmp_path: Path) -> None:
     """A refusal the reader handles is reported in the requested format, not only on stderr."""
     absent = (tmp_path / "absent.json").resolve()

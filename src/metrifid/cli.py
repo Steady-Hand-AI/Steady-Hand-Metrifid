@@ -219,7 +219,16 @@ def _result_request(argv: Sequence[str] | None) -> _ResultRequest | None:
     """
     tokens = list(sys.argv[1:]) if argv is None else list(argv)
     if tokens and tokens[0] == "--":
-        # The parser strips exactly one leading end-of-options marker before the subcommand.
+        # Whether a leading end-of-options marker ever reaches the subcommand is argparse's
+        # business, and it differs by interpreter: 3.12 and later consume one before the
+        # subcommand, while 3.11 rejects it as an invalid command choice. Ask this interpreter's
+        # own parser instead of inferring from a version number, so the scanner can never
+        # recognize a command the parser did not. The probe parses one fixed complete vector and
+        # nothing else happens: no command is dispatched and the placeholder is never opened.
+        try:
+            _parser().parse_args(["--", "show", "RECEIPT"])
+        except _InvocationError:
+            return None
         tokens = tokens[1:]
     if not tokens or tokens[0] not in _RESULT_COMMANDS:
         # Anything else in command position is not a diff or show request, whatever appears

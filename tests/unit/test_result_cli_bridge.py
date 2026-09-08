@@ -722,11 +722,23 @@ def test_a_subcommand_appearing_after_junk_is_not_a_recognized_request(
     "argv",
     [["--", "diff", "--json", "a.xml", "b.xml"], ["--", "show", "--json", "receipt.json"]],
 )
-def test_one_leading_end_of_options_marker_is_stripped_like_the_parser_strips_it(
+def test_a_leading_end_of_options_marker_is_recognized_exactly_as_the_parser_recognizes_it(
     argv: list[str],
 ) -> None:
-    """The parser consumes a single leading marker, so the request behind it is still a request."""
-    parsed = cli._parser().parse_args(argv)
+    """The scanner may never recognize a command this interpreter's parser did not.
+
+    Whether a leading end-of-options marker reaches the subcommand is argparse's decision and it
+    is not the same on every supported interpreter: 3.12 and later consume one, while 3.11 refuses
+    it as an invalid command choice. Rather than encode either answer, this asks the real parser
+    and requires the scanner to agree with whatever it says.
+    """
+    try:
+        parsed = cli._parser().parse_args(argv)
+    except cli._InvocationError:
+        # The parser refused the marker in command position, so no diff or show request was ever
+        # recognized and the scanner must promise nothing for it.
+        assert cli._result_request(argv) is None
+        return
     request = cli._result_request(argv)
     assert request is not None
     assert (request.command, request.as_json) == (parsed.command, parsed.as_json)
