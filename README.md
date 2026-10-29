@@ -75,9 +75,11 @@ Prepare Linux x86_64 with CPython 3.13:
 ```bash
 python3.13 -m venv .venv-repair
 . .venv-repair/bin/activate
-python -m pip install 'metrifid==0.9.0' 'mujoco==3.16.0' 'numpy==2.5.4'
+python -m pip install 'metrifid==0.9.0' 'mujoco==3.17.0' 'numpy==2.5.4'
 metrifid repair --help
 ```
+
+MuJoCo 3.16.0 remains supported for repair; use `mujoco==3.16.0` in the same isolated recipe.
 
 Use the [public request example](https://github.com/Steady-Hand-AI/Steady-Hand-Metrifid/blob/main/examples/repair/planar_push.json)
 and the [run, read and replay guide](https://github.com/Steady-Hand-AI/Steady-Hand-Metrifid/blob/main/docs/repair.md).
@@ -358,13 +360,11 @@ no minor-version ceiling on any platform. Package resolution carries one platfor
 because upstream publishes no Intel macOS wheel for MuJoCo `3.11` or newer, the dependency is
 `mujoco>=3.9,<3.11` on Darwin `x86_64` and `mujoco>=3.9` with no minor ceiling everywhere else.
 That bound is a packaging-resolution fact about upstream wheel availability, not a narrowing of
-what the runtime admits. Exact stable MuJoCo `3.9.0`, `3.10.0`, `3.11.0`, and `3.12.0` profiles are
+what the runtime admits. MuJoCo `3.17.0` is the primary development and release profile on platforms
+without that packaging exception. Exact stable `3.9.0`, `3.10.0`, `3.11.0` and `3.12.0` profiles remain
 retained-validated. A later stable release is admitted only when its Python/native identities agree
 and the requested operation's measured capabilities pass; it is reported as capability-compatible,
-never falsely as validated. On platforms without that packaging exception the newest stable release
-is the primary development and release profile—3.12.0 for the frozen 2026-08-22 snapshot—while the
-exact retained older profiles remain backward-compatibility evidence. NumPy is `>=1.26`, with no
-runtime ceiling and no runtime version gate.
+never falsely as validated. NumPy is `>=1.26`, with no runtime ceiling and no runtime version gate.
 
 The core native commands — `certify`, `review-model`, `compare`, `audit-timestep`,
 and `qualify-workload` —
@@ -378,7 +378,7 @@ call-graph capabilities use `MUJOCO_RUNTIME_CAPABILITY_MISSING`, and an unrepres
 public-field surface, while `certify` may still identify complete MJB bytes on a newer admitted
 runtime. Receipts continue binding exact package, native-library, and installed-distribution hashes.
 
-`repair run` and `repair replay` separately require Linux x86_64, CPython 3.13, MuJoCo 3.16.0
+`repair run` and `repair replay` separately require Linux x86_64, CPython 3.13, MuJoCo 3.16.0 or 3.17.0
 and NumPy 2.5.4. Their fixed family and limits are documented in the repair guide. Help, request
 loading and `repair show` import neither MuJoCo nor NumPy. The broader package dependency markers
 above remain unchanged.

@@ -36,7 +36,7 @@ _VALIDATOR = _REPOSITORY / ".github/scripts/validate_ci_evidence.py"
 _ACTION = _REPOSITORY / "action.yml"
 
 # The expected digest of the frozen release workflow.
-_FROZEN_WORKFLOW_SHA256 = "75729291c81e8de0dbdd56cfd13b7fdfc7c77a4c705157c6aa19c7d3372888d6"
+_FROZEN_WORKFLOW_SHA256 = "e51dcc8e0b11603cb62168aa2e5dbc37e099645c4969995e5c5e3407fda70b1e"
 
 _ALL_JOBS = (
     "build_and_quality",
@@ -387,13 +387,15 @@ def test_no_lane_reintroduces_a_runner_local_mujoco_resolver_override() -> None:
     assert _step_property(repair, "continue-on-error") is None
     active = _active_lines(repair)
     for required in (
-        'venv = scratch / "venv"',
+        'for mujoco_version in ("3.16.0", "3.17.0"):',
+        'venv = scratch / f"venv-{mujoco_version}"',
         'python = venv / "bin/python"',
         'subprocess.run([sys.executable, "-m", "venv", str(venv)], env=environment, check=True)',
-        '[str(python), "-m", "pip", "install", str(wheel), "mujoco==3.16.0", "numpy==2.5.4"],',
+        '[str(python), "-m", "pip", "install", str(wheel), f"mujoco=={mujoco_version}", "numpy==2.5.4"],',
     ):
         assert required in active, required
-    assert len(pin.findall(repair)) == 1
+    assert len(pin.findall(repair)) == 0
+    assert active.count('for mujoco_version in ("3.16.0", "3.17.0"):') == 1
     for name in ("build_and_quality", "matrix_lane", "sdist_install_lane"):
         job = _job(text, name)
         if name == "matrix_lane":
@@ -420,8 +422,8 @@ def test_no_lane_reintroduces_a_runner_local_mujoco_resolver_override() -> None:
             '# subprocess.run([sys.executable, "-m", "venv", str(venv)], env=environment, check=True)',
         ),
         (
-            '[str(python), "-m", "pip", "install", str(wheel), "mujoco==3.16.0", "numpy==2.5.4"],',
-            '[sys.executable, "-m", "pip", "install", str(wheel), "mujoco==3.16.0", "numpy==2.5.4"],',
+            '[str(python), "-m", "pip", "install", str(wheel), f"mujoco=={mujoco_version}", "numpy==2.5.4"],',
+            '[sys.executable, "-m", "pip", "install", str(wheel), f"mujoco=={mujoco_version}", "numpy==2.5.4"],',
         ),
     ],
 )
@@ -482,6 +484,14 @@ def test_retained_exact_profiles_keep_their_own_boundary() -> None:
     job = _job(_workflow_text(), "retained_compatibility_lane")
     assert 'mujoco: "3.10.0"' in job
     assert 'mujoco: "3.11.0"' in job
+    assert 'role: retained_3_12_0\n            mujoco: "3.12.0"' in job
+    assert {
+        role: want.mujoco_version for role, want in _load_validator().RETAINED_EXPECTATIONS.items()
+    } == {
+        "prior_validated": "3.10.0",
+        "current_validated": "3.11.0",
+        "retained_3_12_0": "3.12.0",
+    }
     assert "retained-evidence/focused.xml" in job
     assert "full.xml tests" not in job
     assert "validate_mujoco_compatibility.py" in job
@@ -2244,7 +2254,7 @@ def test_the_helper_accepts_an_exact_python_version_triplet(
     assert _validate(validator, green_tree)["original_wheel_sha256"] == _DIGEST
 
 
-# ---- One installed repair journey in the existing supported matrix row ------------------------
+# ---- Both installed repair runtimes in the existing supported matrix row ------------------------
 
 _REPAIR_STEP_NAME = "Installed repair journey on the supported runtime"
 
@@ -2294,7 +2304,7 @@ def _repair_ci_fixture(tmp_path: Path) -> Path:
     return wheel
 
 
-@pytest.mark.parametrize("failed_call", [0, 1, 2, 3, 4])
+@pytest.mark.parametrize("failed_call", range(9))
 def test_ci_repair_invocation_and_each_command_failure_matter(tmp_path, monkeypatch, failed_call):
     """The installed smoke actually runs, and a failed install or smoke cannot be hidden."""
     wheel = _repair_ci_fixture(tmp_path)
@@ -2317,27 +2327,36 @@ def test_ci_repair_invocation_and_each_command_failure_matter(tmp_path, monkeypa
         assert len(calls) == failed_call
     else:
         exec(_repair_inline_python(), {})
-        assert len(calls) == 4
+        assert len(calls) == 8
         scratch = tmp_path / "runner/metrifid-repair"
-        python = str(scratch / "venv/bin/python")
-        assert calls[1][0] == [
-            python,
-            "-m",
-            "pip",
-            "install",
-            str(wheel),
-            "mujoco==3.16.0",
-            "numpy==2.5.4",
-        ]
-        assert calls[3][0] == [
-            python,
-            str(tmp_path / "examples/repair/installed_smoke.py"),
-            "--output",
-            str(scratch / "journey"),
-            "--expected-version",
-            _CANDIDATE_VERSION,
-        ]
-        assert calls[3][1]["cwd"] == scratch
+        for index, version in enumerate(("3.16.0", "3.17.0")):
+            group = calls[index * 4 : (index + 1) * 4]
+            venv = scratch / f"venv-{version}"
+            python = str(venv / "bin/python")
+            assert group[0][0] == [sys.executable, "-m", "venv", str(venv)]
+            assert group[1][0] == [
+                python,
+                "-m",
+                "pip",
+                "install",
+                str(wheel),
+                f"mujoco=={version}",
+                "numpy==2.5.4",
+            ]
+            assert group[2][0] == [python, "-m", "pip", "check"]
+            assert group[3][0] == [
+                python,
+                str(tmp_path / "examples/repair/installed_smoke.py"),
+                "--output",
+                str(scratch / f"journey-{version}"),
+                "--expected-version",
+                _CANDIDATE_VERSION,
+            ]
+            assert group[3][1]["cwd"] == scratch
+            assert all(
+                kwargs["env"]["PATH"].split(os.pathsep)[0] == str(venv / "bin")
+                for _, kwargs in group
+            )
     assert all(kwargs.get("check") for _, kwargs in calls)
     assert all("PYTHONPATH" not in kwargs["env"] for _, kwargs in calls)
 
@@ -2353,3 +2372,64 @@ def test_ci_repair_rechecks_original_wheel_before_creating_runtime(tmp_path, mon
     with pytest.raises(SystemExit, match="original manifest"):
         exec(_repair_inline_python(), {})
     assert calls == []
+
+
+@pytest.mark.parametrize("role", ["prior_validated", "current_validated", "retained_3_12_0"])
+def test_each_retained_profile_is_required(validator, green_tree, role):
+    """Moving the latest profile must not silently discard an older exact runtime."""
+    shutil.rmtree(green_tree / f"retained-{role}")
+    with pytest.raises(validator.EvidenceError, match="missing retained evidence"):
+        _validate(validator, green_tree)
+
+
+@pytest.mark.parametrize("job", ["matrix_lane", "minimum_dependency_lane", "sdist_install_lane"])
+@pytest.mark.parametrize("exit_code", [0, 37])
+def test_mjb_failures_are_visible_and_preserve_their_exit(tmp_path, job, exit_code):
+    """Execute each actual MJB shell step with a controlled characterization process."""
+    steps = _steps(_job(_workflow_text(), job))
+    step = next(step for step in steps if step.startswith("      - name: MJB characterization"))
+    body = step.split("        run: |\n", 1)[1]
+    script = "\n".join(line[10:] for line in body.splitlines())
+    tools = tmp_path / "tools"
+    tools.mkdir()
+    (tools / "mjb_characterization.py").write_text(
+        "import sys\nprint('characterization stdout')\n"
+        "print('characterization stderr', file=sys.stderr)\n"
+        f"raise SystemExit({exit_code})\n"
+    )
+    binary = tmp_path / "bin"
+    binary.mkdir()
+    (binary / "python").symlink_to(sys.executable)
+    for directory in ("lane-evidence", "sdist-evidence"):
+        (tmp_path / directory).mkdir()
+    completed = subprocess.run(
+        ["bash", "-c", script],
+        cwd=tmp_path,
+        env={**os.environ, "PATH": str(binary) + os.pathsep + os.environ["PATH"]},
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+    assert completed.returncode == exit_code
+    log = next(tmp_path.glob("*-evidence/mjb*.log"))
+    for message in ("characterization stdout", "characterization stderr"):
+        assert message in completed.stdout
+        assert message in log.read_text()
+
+
+def test_diagnostic_uploads_run_after_failure_without_creating_success_records():
+    """Partial logs are retained, while failed work cannot manufacture a passing lane marker."""
+    for job, record in (
+        ("matrix_lane", "Record blocking lane evidence"),
+        ("minimum_dependency_lane", "Record blocking lane evidence"),
+        ("retained_compatibility_lane", "Record retained evidence identity"),
+        ("sdist_install_lane", "Record sdist lane evidence"),
+    ):
+        steps = _steps(_job(_workflow_text(), job))
+        upload = next(step for step in steps if "actions/upload-artifact@" in step)
+        assert _step_property(upload, "if") == "always()"
+        assert _step_property(upload, "continue-on-error") is None
+        marker = next(step for step in steps if step.startswith("      - name: " + record + "\n"))
+        assert _step_property(marker, "if") is None
+        assert _step_property(marker, "continue-on-error") is None

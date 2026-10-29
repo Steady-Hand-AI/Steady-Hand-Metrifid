@@ -53,9 +53,14 @@ METHOD = {
         "stagnant_step_multiplier": 0.5,
     },
 }
-LIMITATIONS = [
+_LEGACY_LIMITATIONS = [
     "Simulation only.",
     "Only planar_push_timed15_v1 on Linux x86_64, CPython 3.13, MuJoCo 3.16.0 and NumPy 2.5.4.",
+    "No global-optimum, robustness, authorship or cross-platform bitwise replay guarantee.",
+]
+LIMITATIONS = [
+    "Simulation only.",
+    "Only planar_push_timed15_v1 on Linux x86_64, CPython 3.13, MuJoCo 3.16.0 or 3.17.0 and NumPy 2.5.4.",
     "No global-optimum, robustness, authorship or cross-platform bitwise replay guarantee.",
 ]
 _COMMON = {
@@ -633,13 +638,37 @@ def _supported_runtime(runtime: dict[str, str]) -> bool:
         "implementation": "CPython",
         "system": "Linux",
         "machine": "x86_64",
-        "mujoco": "3.16.0",
         "numpy": "2.5.4",
     }
     return (
         all(runtime.get(key) == value for key, value in expected.items())
+        and runtime.get("mujoco") in _engine._SUPPORTED_MUJOCO_VERSIONS
         and re.fullmatch(r"3\.13\.\d+", runtime.get("python", "")) is not None
     )
+
+
+def _limitations_runtime(document: dict[str, Any], result: EngineResult | ReplayResult) -> None:
+    """Keep legacy refusals readable without attributing new execution to them."""
+    if document["limitations"] != _LEGACY_LIMITATIONS or result.runtime.get("mujoco") != "3.17.0":
+        return
+    measurements = (
+        (
+            result.initialization,
+            result.initial_screening,
+            result.selected_screening,
+            result.confirmation,
+        )
+        if isinstance(result, EngineResult)
+        else (result.measurement,)
+    )
+    if (
+        result.status != "REFUSED"
+        or result.costs.attempts
+        or result.costs.known_completed_steps
+        or result.costs.unknown_step_calls
+        or any(measurement is not None for measurement in measurements)
+    ):
+        _refuse("MuJoCo 3.17.0 execution requires current limitations")
 
 
 def _outcome(document: dict[str, Any], *, replay: bool) -> None:
@@ -670,7 +699,8 @@ def _common(document: dict[str, Any], *, replay: bool) -> RepairRequest | None:
     if tool["name"] != "metrifid":
         _refuse("Unsupported record tool")
     _text(tool["version"], "tool version")
-    _same(document["limitations"], LIMITATIONS, "limitations")
+    if document["limitations"] not in (_LEGACY_LIMITATIONS, LIMITATIONS):
+        _refuse("Unsupported limitations representation")
     _outcome(document, replay=replay)
     paths = _strings(document["unavailable_measurements"], "unavailable measurements")
     names = (
@@ -1021,6 +1051,7 @@ def _run(document: dict[str, Any], members: Mapping[str, bytes]) -> EngineResult
     _bindings(result)
     _witness_costs(result)
     _successful_run(result, members)
+    _limitations_runtime(document, result)
     return result
 
 
@@ -1073,6 +1104,7 @@ def _replay(document: dict[str, Any], members: Mapping[str, bytes]) -> ReplayRes
         or result.costs.cpu_seconds >= request.limits.max_cpu_seconds
     ):
         _refuse("Replay qualification lacks complete supported-runtime evidence")
+    _limitations_runtime(document, result)
     return result
 
 

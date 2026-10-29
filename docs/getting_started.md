@@ -77,14 +77,16 @@ target position, target yaw and 15 normalized starting controller parameters. Bo
 polling adjusts the parameters, then independently confirms a qualifying controller at both
 supported timesteps. It does not edit arbitrary MJCF models.
 
-Repair and replay require Linux x86_64, CPython 3.13, MuJoCo 3.16.0 and NumPy 2.5.4:
+Repair and replay require Linux x86_64, CPython 3.13, MuJoCo 3.16.0 or 3.17.0 and NumPy 2.5.4:
 
 ```bash
 python3.13 -m venv .venv-repair
 . .venv-repair/bin/activate
-python -m pip install 'metrifid==0.9.0' 'mujoco==3.16.0' 'numpy==2.5.4'
+python -m pip install 'metrifid==0.9.0' 'mujoco==3.17.0' 'numpy==2.5.4'
 metrifid repair --help
 ```
+
+MuJoCo 3.16.0 remains supported for repair; use `mujoco==3.16.0` in the same isolated recipe.
 
 Follow the [repair guide](repair.md) with the [public request](../examples/repair/planar_push.json)
 for run → show → moved-bundle replay, human and JSON output, and the exact request and record
@@ -266,15 +268,15 @@ Python:          3.11 or newer, with no artificial upper bound
 MuJoCo runtime:  stable MuJoCo >=3.9, capability-based, with no minor-version ceiling
 MuJoCo package:  >=3.9,<3.11 on Darwin x86_64; >=3.9 with no ceiling elsewhere
 MuJoCo identity: package base, native string, and native integer must agree
-Validated exact: 3.9.0, 3.10.0, 3.11.0, and 3.12.0
+Validated exact: 3.9.0, 3.10.0, 3.11.0, 3.12.0, and 3.17.0
 NumPy:           1.26 or newer, with no runtime upper bound
 Operating system: Linux or macOS with the required POSIX filesystem capabilities
 Architecture:    recorded as evidence, not rejected through an architecture allowlist
 ```
 
 On platforms without the packaging exception below, the newest stable MuJoCo is the primary
-development and release profile—3.12.0 for the frozen 2026-08-22 snapshot. Exact 3.9.0 is the
-supported minimum, and retained 3.10.0 and 3.11.0 results are backward-compatibility evidence.
+development and release profile—3.17.0. Exact 3.9.0 is the supported minimum, and retained 3.10.0,
+3.11.0 and 3.12.0 results are backward-compatibility evidence.
 A normal installation there keeps the `mujoco>=3.9` resolver policy and therefore encounters a
 newer stable release automatically.
 
@@ -958,8 +960,9 @@ The core package has no artificial Python upper bound. A future Python version i
 
 For core model-comparison commands, yes, when the package/native identity is coherent and the
 requested operation's measured capabilities are present. Repair execution separately requires
-MuJoCo 3.16.0. Exact 3.9.0 through 3.12.0 profiles are retained-validated. A later stable
-release is reported as capability-compatible, not validated. Runtime admission is not blanket claim
+MuJoCo 3.16.0 or 3.17.0. The primary core profile is 3.17.0; exact 3.9.0, 3.10.0, 3.11.0
+and 3.12.0 profiles remain retained-validated. A later stable release is reported as
+capability-compatible, not validated. Runtime admission is not blanket claim
 support: `review-model` refuses an uncharacterized public-field surface, and static or dynamic
 one-actuator projections refuse a zero/multi-input or multi-output signature before publishing a
 completed result. The refusal evidence names the missing coverage and a concrete remediation.

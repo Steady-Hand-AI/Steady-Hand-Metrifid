@@ -29,6 +29,17 @@ _RUNTIME = {
     "numpy": "2.5.4",
 }
 
+_LEGACY_LIMITATIONS = [
+    "Simulation only.",
+    "Only planar_push_timed15_v1 on Linux x86_64, CPython 3.13, MuJoCo 3.16.0 and NumPy 2.5.4.",
+    "No global-optimum, robustness, authorship or cross-platform bitwise replay guarantee.",
+]
+_CURRENT_LIMITATIONS = [
+    "Simulation only.",
+    "Only planar_push_timed15_v1 on Linux x86_64, CPython 3.13, MuJoCo 3.16.0 or 3.17.0 and NumPy 2.5.4.",
+    "No global-optimum, robustness, authorship or cross-platform bitwise replay guarantee.",
+]
+
 
 def _pair(vector: tuple[float, ...], *, qualified: bool) -> PairedMeasurement:
     cases = []
@@ -163,11 +174,15 @@ def test_encoding_and_parameter_identity_preserve_binary64() -> None:
 
 
 @pytest.mark.parametrize("qualified", [False, True])
-def test_run_round_trip_reconstitutes_typed_evidence(qualified: bool) -> None:
+@pytest.mark.parametrize("mujoco", ["3.16.0", "3.17.0"])
+def test_run_round_trip_reconstitutes_typed_evidence(qualified: bool, mujoco: str) -> None:
     """Both confirmed recovery and finite nonqualification retain their typed evidence."""
     result = _result(qualified=qualified)
+    result.runtime["mujoco"] = mujoco
     raw, members = _codec.serialize_run(result)
-    admitted = _codec.admit_record(_codec.decode_document(raw), members)
+    document = _codec.decode_document(raw)
+    assert document["limitations"] == _CURRENT_LIMITATIONS
+    admitted = _codec.admit_record(document, members)
     assert isinstance(admitted, EngineResult)
     assert admitted == replace(result, screening_measurements=[])
     repeated, repeated_members = _codec.serialize_run(admitted)
@@ -242,10 +257,9 @@ def test_nonfinite_request_or_selected_controller_is_never_sanitized() -> None:
         _codec.serialize_run(result)
 
 
-def test_standalone_replay_round_trip_needs_no_members() -> None:
-    """Fresh replay remains a small standalone result with source linkage."""
+def _replay_result() -> ReplayResult:
     source = _result()
-    result = ReplayResult(
+    return ReplayResult(
         "QUALIFIED",
         0,
         "COMPLETE_PAIRED_EVALUATION",
@@ -256,13 +270,104 @@ def test_standalone_replay_round_trip_needs_no_members() -> None:
         _RUNTIME.copy(),
         ExecutionCosts(0, 6200, 6200, 0, 0.2, source.request.limits, None),
     )
+
+
+@pytest.mark.parametrize("mujoco", ["3.16.0", "3.17.0"])
+def test_standalone_replay_round_trip_needs_no_members(mujoco: str) -> None:
+    """Fresh replay remains a small standalone result with source linkage."""
+    result = _replay_result()
+    result.runtime["mujoco"] = mujoco
     raw = _codec.serialize_replay(result, "a" * 64)
     document = _codec.decode_document(raw)
+    assert document["limitations"] == _CURRENT_LIMITATIONS
     assert document["source_repair_sha256"] == "a" * 64
     assert _codec.artifact_records(document) == {}
     assert _codec.admit_record(document, {}) == result
     with pytest.raises(RepairInputError):
         _codec.admit_record(document, {"nominal.xml": b"not a replay member"})
+
+
+def _record(result: EngineResult | ReplayResult):
+    if isinstance(result, EngineResult):
+        raw, members = _codec.serialize_run(result)
+    else:
+        raw, members = _codec.serialize_replay(result, "a" * 64), {}
+    return _codec.decode_document(raw), members
+
+
+@pytest.mark.parametrize("operation", ["run", "replay"])
+def test_exact_legacy_limitations_preserve_recorded_316_success(operation: str) -> None:
+    """Pre-extension records retain their measured outcome and runtime identity."""
+    result = _result() if operation == "run" else _replay_result()
+    document, members = _record(result)
+    document["limitations"] = _LEGACY_LIMITATIONS.copy()
+    admitted = _codec.admit_record(document, members)
+    assert admitted.status == result.status
+    assert admitted.runtime == _RUNTIME
+    assert admitted.qualified
+    assert admitted.costs == result.costs
+
+
+@pytest.mark.parametrize("operation", ["run", "replay"])
+@pytest.mark.parametrize(
+    "runtime", [{}, {"implementation": "CPython"}, {"mujoco": "3.16.0"}, {"mujoco": "3.17.0"}]
+)
+def test_legacy_refusal_does_not_claim_runtime_execution(operation: str, runtime) -> None:
+    """Absent or partial discovery is valid when a legacy invocation never executed."""
+    result = (
+        EngineResult("REFUSED", 64, "UNSUPPORTED_RUNTIME", runtime=runtime)
+        if operation == "run"
+        else ReplayResult("REFUSED", 64, "UNSUPPORTED_RUNTIME", runtime=runtime)
+    )
+    document, members = _record(result)
+    document["limitations"] = _LEGACY_LIMITATIONS.copy()
+    admitted = _codec.admit_record(document, members)
+    assert admitted == result
+    assert not admitted.qualified
+    assert admitted.costs.known_completed_steps == 0
+
+
+@pytest.mark.parametrize("kind", ["run", "negative_run", "replay", "setup_refusal", "unknown_call"])
+def test_317_execution_cannot_claim_legacy_316_limitations(kind: str) -> None:
+    """New-runtime work must carry the exact extended support statement."""
+    result = _result(qualified=kind != "negative_run") if "run" in kind else _replay_result()
+    if kind in ("setup_refusal", "unknown_call"):
+        result = replace(
+            result,
+            status="REFUSED",
+            exit_code=64,
+            reason="RESET_MISMATCH",
+            measurement=None,
+            qualified=False,
+            costs=ExecutionCosts(
+                integration_steps=200 if kind == "setup_refusal" else None,
+                known_completed_steps=200 if kind == "setup_refusal" else 0,
+                unknown_step_calls=int(kind == "unknown_call"),
+                limits=result.request.limits,
+            ),
+        )
+    result.runtime["mujoco"] = "3.17.0"
+    document, members = _record(result)
+    assert _codec.admit_record(document, members).runtime["mujoco"] == "3.17.0"
+    document["limitations"] = _LEGACY_LIMITATIONS.copy()
+    with pytest.raises(RepairInputError, match="limitations"):
+        _codec.admit_record(document, members)
+
+
+@pytest.mark.parametrize(
+    "limitations",
+    [
+        list(reversed(_LEGACY_LIMITATIONS)),
+        _CURRENT_LIMITATIONS[:-1],
+        ["Simulation only.", "Any installed runtime.", _CURRENT_LIMITATIONS[-1]],
+    ],
+)
+def test_limitations_compatibility_is_not_arbitrary_text(limitations) -> None:
+    """Only the two complete documented representations are admitted."""
+    document, members = _document()
+    document["limitations"] = limitations
+    with pytest.raises(RepairInputError, match="limitations"):
+        _codec.admit_record(document, members)
 
 
 @pytest.mark.parametrize(
@@ -457,10 +562,19 @@ def test_member_allowlist_bounds_hashes_and_unavailable_paths() -> None:
         _codec.admit_record(document, members)
 
 
-def test_native_free_public_codec_in_fresh_process(tmp_path: Path) -> None:
-    """Importing and reading real decimal bundles does not import either native library."""
-    raw, members = _codec.serialize_run(_result())
-    (tmp_path / "repair.json").write_bytes(raw)
+@pytest.mark.parametrize(
+    ("mujoco", "legacy"), [("3.16.0", True), ("3.16.0", False), ("3.17.0", False)]
+)
+def test_native_free_public_codec_in_fresh_process(
+    tmp_path: Path, mujoco: str, legacy: bool
+) -> None:
+    """Legacy and current bundles remain readable with both native imports forbidden."""
+    result = _result()
+    result.runtime["mujoco"] = mujoco
+    document, members = _record(result)
+    if legacy:
+        document["limitations"] = _LEGACY_LIMITATIONS.copy()
+    (tmp_path / "repair.json").write_bytes(_codec.encode_json(document))
     for name, contents in members.items():
         (tmp_path / name).write_bytes(contents)
     script = r"""
@@ -472,16 +586,21 @@ class Deny(importlib.abc.MetaPathFinder):
         if fullname.split('.')[0] in ('numpy', 'mujoco'):
             raise AssertionError('native import forbidden: ' + fullname)
 sys.meta_path.insert(0, Deny())
-from metrifid.repair import _codec
+from metrifid.repair import _codec, read_result_file
 root = Path(sys.argv[1])
 document = _codec.decode_document((root/'repair.json').read_bytes())
 members = {name:(root/name).read_bytes() for name in _codec.artifact_records(document)}
 result = _codec.admit_record(document,members)
 assert result.status == 'REPAIRED' and result.qualified
+assert result.runtime['mujoco'] == sys.argv[2]
+read = read_result_file(root/'repair.json')
+assert read.command_status == 'READ' and read.command_exit_code == 0
+assert read.recorded_status == 'REPAIRED' and read.recorded_exit_code == 0
+assert read.document['runtime']['mujoco'] == sys.argv[2]
 assert 'numpy' not in sys.modules and 'mujoco' not in sys.modules
 """
     completed = subprocess.run(
-        [sys.executable, "-I", "-B", "-c", script, str(tmp_path)],
+        [sys.executable, "-I", "-B", "-c", script, str(tmp_path), mujoco],
         capture_output=True,
         text=True,
         check=False,

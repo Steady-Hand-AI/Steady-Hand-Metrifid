@@ -3,11 +3,17 @@
 from __future__ import annotations
 
 import hashlib as _hashlib
+import json
 import os
 import shutil as _shutil
+import struct
+import subprocess
+import sys
+import zlib
 from pathlib import Path
 
 import mujoco
+import numpy as np
 import pytest
 
 from metrifid import _model_admission as admission
@@ -408,13 +414,8 @@ def test_builtin_activation_families(tmp_path: Path) -> None:
     assert by_name["integrator"].activation_width == 1
 
 
-def test_nested_include_and_file_backed_asset_compile_from_snapshot(tmp_path: Path) -> None:
-    """Keep model equivalence claims scoped to complete compiled identities.
-
-    This scenario exercises nested include and file backed asset compile from snapshot;
-    incomplete, ambiguous, or unbound model components cannot support certification.
-    """
-    root = tmp_path / "asset-model"
+def _file_backed_asset_root(root: Path) -> Path:
+    """Write the existing nested-include tetrahedral OBJ fixture under one owned root."""
     (root / "parts").mkdir(parents=True)
     (root / "model.xml").write_text(
         """<mujoco><asset><mesh name="tetra" file="parts/tetra.obj"/></asset>
@@ -438,7 +439,16 @@ f 2 3 4
 """,
         encoding="ascii",
     )
-    root = root.resolve()
+    return root.resolve()
+
+
+def test_nested_include_and_file_backed_asset_compile_from_snapshot(tmp_path: Path) -> None:
+    """Keep model equivalence claims scoped to complete compiled identities.
+
+    This scenario exercises nested include and file backed asset compile from snapshot;
+    incomplete, ambiguous, or unbound model components cannot support certification.
+    """
+    root = _file_backed_asset_root(tmp_path / "asset-model")
     result = build_model_pair_identity(root, "model.xml", root, "model.xml")
     assert result.baseline_closure.member_count == 3
     assert [item.path for item in result.baseline_closure.members] == [
@@ -446,3 +456,213 @@ f 2 3 4
         "parts/body.xml",
         "parts/tetra.obj",
     ]
+
+
+def _complete_mjb(model: mujoco.MjModel) -> bytes:
+    """Serialize every byte of a live model without field filtering."""
+    buffer = np.zeros(mujoco.mj_sizeModel(model), dtype=np.uint8)
+    mujoco.mj_saveModel(model, None, buffer)
+    return buffer.tobytes()
+
+
+def test_file_backed_snapshots_preserve_exact_bytes_across_roles_and_relocation(
+    tmp_path: Path,
+) -> None:
+    """Temporary snapshot paths must not turn the same measured inputs into different MJBs."""
+    root = _file_backed_asset_root(tmp_path / "source")
+    relocated = tmp_path / "deeper" / "copy"
+    _shutil.copytree(root, relocated)
+    models = [
+        _compile(root, "baseline"),
+        _compile(root, "candidate"),
+        _compile(relocated, "candidate"),
+    ]
+    original = _complete_mjb(models[0])
+    assert all(_complete_mjb(model) == original for model in models)
+    assert all(model.paths == b"parts/tetra.obj\x00" for model in models)
+    body = root / "parts" / "body.xml"
+    body.write_text(body.read_text().replace('mass="1"', 'mass="1.01"'), encoding="utf-8")
+    assert _complete_mjb(_compile(root, "candidate")) != original
+    retained = tmp_path / "retained.mjb"
+    retained.write_bytes(original)
+    root.rename(tmp_path / "source-unavailable")
+    relocated.rename(tmp_path / "copy-unavailable")
+    assert _complete_mjb(mujoco.MjModel.from_binary_path(str(retained))) == original
+
+
+def test_nested_entrypoint_preserves_distinct_same_basename_assets(tmp_path: Path) -> None:
+    """Compile exact closure-relative names without flattening or basename substitution."""
+    root = _file_backed_asset_root(tmp_path / "source")
+    for name, apex in (("left", "1"), ("right", "1.4")):
+        asset = root / "parts" / name / "tetra.obj"
+        asset.parent.mkdir()
+        asset.write_text(
+            (root / "parts" / "tetra.obj").read_text().replace("v 0 0 1\n", f"v 0 0 {apex}\n"),
+            encoding="ascii",
+        )
+    (root / "parts" / "assets.xml").write_text(
+        '<mujocoinclude><asset><mesh name="left" file="left/tetra.obj"/>'
+        '<mesh name="right" file="right/tetra.obj"/></asset></mujocoinclude>',
+        encoding="utf-8",
+    )
+    entrypoint = root / "models" / "model.xml"
+    entrypoint.parent.mkdir()
+    entrypoint.write_text(
+        '<mujoco><compiler meshdir="../parts"/><include file="../parts/assets.xml"/>'
+        '<worldbody><body><joint name="joint" armature=".01"/>'
+        '<geom type="mesh" mesh="left" mass="1"/>'
+        '<geom type="mesh" mesh="right" mass="1" pos="0 0 2"/>'
+        "</body></worldbody></mujoco>",
+        encoding="utf-8",
+    )
+    native = mujoco.MjModel.from_xml_path(str(entrypoint))
+    with closure.create_model_closure_snapshot(root, "models/model.xml", "baseline") as snapshot:
+        model = admission.compile_snapshot_model(snapshot, "baseline")
+    assert model.nmesh == 2
+    assert model.mesh_vertnum.tolist() == [4, 4]
+    np.testing.assert_array_equal(model.mesh_vert, native.mesh_vert)
+    assert b"left/tetra.obj\x00" in model.paths
+    assert b"right/tetra.obj\x00" in model.paths
+    assert str(tmp_path).encode() not in model.paths
+
+
+def _texture_model_root(root: Path, *, explicit: bool) -> Path:
+    """Write a valid two-by-two RGB texture and a by-reference texture declaration."""
+    root.mkdir()
+
+    def chunk(kind: bytes, content: bytes) -> bytes:
+        return (
+            struct.pack(">I", len(content))
+            + kind
+            + content
+            + struct.pack(">I", zlib.crc32(kind + content))
+        )
+
+    rows = b"\x00" + bytes((255, 0, 0, 0, 255, 0))
+    rows += b"\x00" + bytes((0, 0, 255, 255, 255, 255))
+    (root / "skin.png").write_bytes(
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", struct.pack(">IIBBBBB", 2, 2, 8, 2, 0, 0, 0))
+        + chunk(b"IDAT", zlib.compress(rows))
+        + chunk(b"IEND", b"")
+    )
+    compiler = "" if explicit else '<compiler passthrough="textures"/>'
+    embed = ' embed="false"' if explicit else ""
+    (root / "model.xml").write_text(
+        f'<mujoco>{compiler}<asset><texture name="t" type="2d" file="skin.png"{embed}/>'
+        '<material name="mat" texture="t"/></asset><worldbody>'
+        '<geom type="sphere" size=".1" material="mat"/></worldbody></mujoco>',
+        encoding="utf-8",
+    )
+    return root
+
+
+def _assert_texture_syntax_refused(root: Path, attribute: str) -> None:
+    """Check native syntax rejection and its typed product refusal on retained runtimes."""
+    message = f"unrecognized attribute: '{attribute}'"
+    with pytest.raises(ValueError, match=message):
+        mujoco.MjModel.from_xml_path(str(root / "model.xml"))
+    with pytest.raises(closure.ModelAdmissionRefusal) as caught:
+        _compile(root, "baseline")
+    assert caught.value.reason is OperationalReasonCode.BASELINE_MODEL_COMPILE_ERROR
+    assert message in caught.value.evidence["message"]
+
+
+@pytest.mark.parametrize("explicit", [False, True])
+def test_by_reference_texture_cannot_escape_complete_artifact_admission(
+    tmp_path: Path, explicit: bool
+) -> None:
+    """A real external texture is refused; compiling alone cannot prove a self-contained MJB."""
+    root = _texture_model_root(tmp_path / "source", explicit=explicit)
+    if mujoco.mj_version() < 3_017_000:
+        _assert_texture_syntax_refused(root, "embed" if explicit else "passthrough")
+        return
+    native = mujoco.MjModel.from_xml_path(str(root / "model.xml"))
+    assert native.tex_adr.tolist() == [-1]
+    assert native.ntexdata == 0
+    with pytest.raises(closure.ModelAdmissionRefusal) as caught:
+        admission.admit_external_implementation_free_model(native, "baseline")
+    assert caught.value.reason is OperationalReasonCode.MUJOCO_FEATURE_COVERAGE_INCOMPLETE
+    assert caught.value.evidence["feature"] == "external_texture_assets"
+    assert caught.value.evidence["external_texture_indices"] == (0,)
+
+
+def test_explicit_by_reference_texture_refuses_without_publication(tmp_path: Path) -> None:
+    """Explicit external storage cannot become a successful complete-artifact certificate."""
+    from metrifid.certify import CertifyOperationError, certify_models
+
+    root = _texture_model_root(tmp_path / "source", explicit=True)
+    output = tmp_path / "output"
+    with pytest.raises(CertifyOperationError) as caught:
+        certify_models(str(root / "model.xml"), str(root / "model.xml"), str(output))
+    assert caught.value.failure.reason.code is OperationalReasonCode.BASELINE_MODEL_COMPILE_ERROR
+    expected_message = (
+        "unrecognized attribute: 'embed'"
+        if mujoco.mj_version() < 3_017_000
+        else "texture cannot be by reference"
+    )
+    assert expected_message in caught.value.failure.reason.evidence["message"]
+    assert not (output / "certification.json").exists()
+
+
+def test_texture_passthrough_retains_pixels_after_source_disappears(tmp_path: Path) -> None:
+    """A VFS-served texture remains fully embedded through serialization and source removal."""
+    root = _texture_model_root(tmp_path / "source", explicit=False)
+    if mujoco.mj_version() < 3_017_000:
+        _assert_texture_syntax_refused(root, "passthrough")
+        return
+    model = _compile(root, "baseline")
+    admission.admit_external_implementation_free_model(model, "baseline")
+    assert model.tex_adr.tolist() == [0]
+    assert model.ntexdata == 12
+    pixels = model.tex_data.tobytes()
+    complete = _complete_mjb(model)
+    retained = tmp_path / "retained.mjb"
+    retained.write_bytes(complete)
+    root.rename(tmp_path / "source-unavailable")
+    reloaded = mujoco.MjModel.from_binary_path(str(retained))
+    assert reloaded.tex_data.tobytes() == pixels
+    assert _complete_mjb(reloaded) == complete
+
+
+@pytest.mark.parametrize("operation", ["certify", "diff"])
+def test_file_backed_installed_commands_distinguish_relocation_from_physical_change(
+    tmp_path: Path, operation: str
+) -> None:
+    """Exercise actual command dispatch, retained results, stable repeats and a physical control."""
+    source = _file_backed_asset_root(tmp_path / "source")
+    relocated = tmp_path / "deeper" / "relocated"
+    _shutil.copytree(source, relocated)
+    physical = tmp_path / "physical"
+    _shutil.copytree(source, physical)
+    body = physical / "parts" / "body.xml"
+    body.write_text(body.read_text().replace('mass="1"', 'mass="1.01"'), encoding="utf-8")
+    receipts = []
+    filename = "certification.json" if operation == "certify" else "model_release.json"
+    for label, candidate, expected in (
+        ("same", source, 0),
+        ("repeat", source, 0),
+        ("relocated", relocated, 0),
+        ("physical", physical, 40),
+    ):
+        output = tmp_path / ("out-" + label)
+        command = [
+            sys.executable,
+            "-m",
+            "metrifid.cli",
+            operation,
+            str(source / "model.xml"),
+            str(candidate / "model.xml"),
+            "--output",
+            str(output),
+        ]
+        if operation == "diff":
+            command.append("--json")
+        completed = subprocess.run(command, capture_output=True, text=True, check=False)
+        assert completed.returncode == expected, completed.stderr
+        document = json.loads(completed.stdout)
+        assert isinstance(document, dict)
+        receipt = (output / filename).read_bytes()
+        assert str(tmp_path).encode() not in receipt
+        receipts.append(receipt)
+    assert receipts[0] == receipts[1]

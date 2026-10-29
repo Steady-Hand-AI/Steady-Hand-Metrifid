@@ -18,6 +18,8 @@ import mujoco  # type: ignore[import-untyped]
 
 from ._model_closure import ModelClosureSnapshot, ModelRole, refuse
 from ._model_dependencies import (
+    _member_bytes,
+    _member_map,
     discover_snapshot_dependencies,
     first_complete_root_element,
     read_measured_entrypoint_bytes,
@@ -205,14 +207,22 @@ def compile_snapshot_model(snapshot: ModelClosureSnapshot, role: ModelRole) -> m
                 role,
                 active_callbacks=cast(CanonicalValue, active),
             )
-        discover_snapshot_dependencies(snapshot, role)
+        dependencies = discover_snapshot_dependencies(snapshot, role)
         _require_mjcf_root(snapshot, role)
-        entrypoint = snapshot.snapshot_entrypoint
+        members = _member_map(snapshot)
         previous_warning = mujoco.get_mju_user_warning()
         mujoco.set_mju_user_warning(warnings.append)
         try:
             try:
-                model = mujoco.MjModel.from_xml_path(str(entrypoint))
+                # Native VFS keys preserve exact closure-relative paths, including duplicate
+                # basenames. The compiler therefore records the same asset identity for both
+                # roles without exposing private snapshot directories in serialized models.
+                with mujoco.MjVfs() as vfs:
+                    for relative in dependencies:
+                        vfs[relative] = _member_bytes(
+                            snapshot, role, relative, members, "compilation_inputs"
+                        )
+                    model = mujoco.MjModel.from_xml_path(snapshot.entrypoint, vfs=vfs)
             except (ValueError, mujoco.FatalError) as exc:
                 raise refuse(
                     _compile_reason(role, warning=False),
@@ -288,6 +298,15 @@ def admit_external_implementation_free_model(
         raise ValueError("model admission requires a baseline or candidate role")
     if runtime is not None:
         admit_model_feature_coverage(model, runtime, role)
+    external_textures = [index for index, address in enumerate(model.tex_adr) if int(address) < 0]
+    if external_textures:
+        raise refuse(
+            OperationalReasonCode.MUJOCO_FEATURE_COVERAGE_INCOMPLETE,
+            role,
+            feature="external_texture_assets",
+            external_texture_indices=cast(CanonicalValue, external_textures),
+            requirement="all texture pixels must be embedded in the compiled artifact",
+        )
     plugin_arrays = _active_plugin_arrays(model)
     if model.nplugin != 0 or model.npluginstate != 0 or plugin_arrays:
         raise refuse(

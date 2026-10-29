@@ -118,6 +118,7 @@ SMOKE_LANES: tuple[str, ...] = tuple(
 RETAINED_EXPECTATIONS: Mapping[str, Expectation] = {
     "prior_validated": Expectation("focused", "Linux", "x86_64", "3.12", mujoco_version="3.10.0"),
     "current_validated": Expectation("focused", "Linux", "x86_64", "3.12", mujoco_version="3.11.0"),
+    "retained_3_12_0": Expectation("focused", "Linux", "x86_64", "3.12", mujoco_version="3.12.0"),
 }
 SDIST_EXPECTATION = Expectation("focused", "Linux", "x86_64", "3.12")
 BUILD_EXPECTATION = Expectation("quality", "Linux", "x86_64", "3.11")

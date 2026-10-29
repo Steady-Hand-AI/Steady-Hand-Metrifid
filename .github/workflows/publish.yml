@@ -47,7 +47,7 @@ env:
   PLANNED_TAG: ${{ inputs.planned_tag }}
   RELEASE_MODE: ${{ inputs.mode }}
   RELEASE_ARTIFACT: metrifid-${{ inputs.release_version }}-release
-  PRIMARY_MUJOCO: "3.12.0"
+  PRIMARY_MUJOCO: "3.17.0"
 
 jobs:
   workflow_contract:
@@ -457,7 +457,7 @@ jobs:
             "$RELEASE_VENV/bin/python" -m pytest -q --junitxml="$JUNIT_REPORT" \
               "$GITHUB_WORKSPACE/tests"
           PATH="$RELEASE_VENV/bin:$PATH" PYTHONPATH= \
-            "$RELEASE_VENV/bin/python" "$GITHUB_WORKSPACE/tools/mjb_characterization.py" > "$MJB_LOG"
+            "$RELEASE_VENV/bin/python" "$GITHUB_WORKSPACE/tools/mjb_characterization.py" 2>&1 | tee "$MJB_LOG"
           cd "$DEMO_CWD"
           PATH="$RELEASE_VENV/bin:$PATH" PYTHONPATH= \
             "$RELEASE_VENV/bin/python" -m metrifid.demo > "$DEMO_LOG"
@@ -1063,22 +1063,23 @@ jobs:
           for member_name, blob in contents.items():
               with (public / wanted[member_name][0]).open("xb") as output:
                   output.write(blob)
-          venv = scratch / "venv"
-          python = venv / "bin/python"
-          environment = dict(os.environ)
-          environment.pop("PYTHONPATH", None)
-          environment["PATH"] = str(venv / "bin") + os.pathsep + environment["PATH"]
-          subprocess.run([sys.executable, "-m", "venv", str(venv)], env=environment, check=True)
-          subprocess.run(
-              [str(python), "-m", "pip", "install", str(wheel), "mujoco==3.16.0", "numpy==2.5.4"],
-              env=environment, check=True,
-          )
-          subprocess.run([str(python), "-m", "pip", "check"], env=environment, check=True)
-          subprocess.run(
-              [str(python), str(public / "installed_smoke.py"), "--output", str(scratch / "journey"),
-               "--expected-version", version],
-              cwd=scratch, env=environment, check=True,
-          )
+          for mujoco_version in ("3.16.0", "3.17.0"):
+              venv = scratch / f"venv-{mujoco_version}"
+              python = venv / "bin/python"
+              environment = dict(os.environ)
+              environment.pop("PYTHONPATH", None)
+              environment["PATH"] = str(venv / "bin") + os.pathsep + environment["PATH"]
+              subprocess.run([sys.executable, "-m", "venv", str(venv)], env=environment, check=True)
+              subprocess.run(
+                  [str(python), "-m", "pip", "install", str(wheel), f"mujoco=={mujoco_version}", "numpy==2.5.4"],
+                  env=environment, check=True,
+              )
+              subprocess.run([str(python), "-m", "pip", "check"], env=environment, check=True)
+              subprocess.run(
+                  [str(python), str(public / "installed_smoke.py"), "--output", str(scratch / f"journey-{mujoco_version}"),
+                   "--expected-version", version],
+                  cwd=scratch, env=environment, check=True,
+              )
           PY
 
   pypi_publish:
@@ -1525,22 +1526,23 @@ jobs:
           for member_name, blob in contents.items():
               with (public / wanted[member_name][0]).open("xb") as output:
                   output.write(blob)
-          venv = scratch / "venv"
-          python = venv / "bin/python"
-          environment = dict(os.environ)
-          environment.pop("PYTHONPATH", None)
-          environment["PATH"] = str(venv / "bin") + os.pathsep + environment["PATH"]
-          subprocess.run([sys.executable, "-m", "venv", str(venv)], env=environment, check=True)
-          subprocess.run(
-              [str(python), "-m", "pip", "install", str(wheel), "mujoco==3.16.0", "numpy==2.5.4"],
-              env=environment, check=True,
-          )
-          subprocess.run([str(python), "-m", "pip", "check"], env=environment, check=True)
-          subprocess.run(
-              [str(python), str(public / "installed_smoke.py"), "--output", str(scratch / "journey"),
-               "--expected-version", version],
-              cwd=scratch, env=environment, check=True,
-          )
+          for mujoco_version in ("3.16.0", "3.17.0"):
+              venv = scratch / f"venv-{mujoco_version}"
+              python = venv / "bin/python"
+              environment = dict(os.environ)
+              environment.pop("PYTHONPATH", None)
+              environment["PATH"] = str(venv / "bin") + os.pathsep + environment["PATH"]
+              subprocess.run([sys.executable, "-m", "venv", str(venv)], env=environment, check=True)
+              subprocess.run(
+                  [str(python), "-m", "pip", "install", str(wheel), f"mujoco=={mujoco_version}", "numpy==2.5.4"],
+                  env=environment, check=True,
+              )
+              subprocess.run([str(python), "-m", "pip", "check"], env=environment, check=True)
+              subprocess.run(
+                  [str(python), str(public / "installed_smoke.py"), "--output", str(scratch / f"journey-{mujoco_version}"),
+                   "--expected-version", version],
+                  cwd=scratch, env=environment, check=True,
+              )
           PY
 
   github_release:

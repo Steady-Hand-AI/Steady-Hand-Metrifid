@@ -130,8 +130,8 @@ def _retargeted_actuator_model(joint_order: tuple[str, str], target: str) -> str
   <compiler angle="radian"/>
   <worldbody>
     <body name="root">
-      <joint name="{first}" type="hinge" axis="1 0 0"/>
-      <joint name="{second}" type="hinge" axis="1 0 0"/>
+      <joint name="{first}" type="hinge" axis="1 0 0" armature="0.01"/>
+      <joint name="{second}" type="hinge" axis="1 0 0" armature="0.01"/>
       <geom name="g" type="sphere" size="0.1" mass="1"/>
     </body>
   </worldbody>
@@ -849,6 +849,18 @@ def test_actuator_target_identity_uses_typed_names_not_reorderable_numeric_ids(
     """Expose a named A-to-B retarget even when both compiled transmission IDs equal zero."""
     baseline = _retargeted_actuator_model(("A", "B"), "A")
     candidate = _retargeted_actuator_model(("B", "A"), "B")
+    import mujoco  # type: ignore[import-untyped]
+
+    warnings: list[str] = []
+    previous_warning = mujoco.get_mju_user_warning()
+    mujoco.set_mju_user_warning(warnings.append)
+    try:
+        compiled = [mujoco.MjModel.from_xml_string(xml) for xml in (baseline, candidate)]
+    finally:
+        mujoco.set_mju_user_warning(previous_warning)
+    assert warnings == []
+    assert [int(model.actuator_trnid[0, 0]) for model in compiled] == [0, 0]
+    assert [model.joint(0).name for model in compiled] == ["A", "B"]
     discovery = _discovery(tmp_path, baseline, candidate)
     target = ("actuator", "m", "targets", "MODIFY")
     target_change = _find_change(discovery.changes, target)

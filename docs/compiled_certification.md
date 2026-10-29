@@ -34,14 +34,14 @@ architecture     never rejected; the machine string is receipt evidence only
 MuJoCo runtime   stable >=3.9, capability-based, with no minor ceiling anywhere
 MuJoCo package   >=3.9,<3.11 on Darwin x86_64; >=3.9 with no ceiling elsewhere
 MuJoCo identity  package/native three-part base and native integer agree exactly
-validated exact  3.9.0, 3.10.0, 3.11.0, and 3.12.0
+validated exact  3.9.0, 3.10.0, 3.11.0, 3.12.0, and 3.17.0
 NumPy            >=1.26, no runtime upper bound
 ```
 
 Upstream publishes no Intel macOS wheel for MuJoCo 3.11 or newer, so the declared package requirement
 is bounded on Darwin `x86_64` only; the runtime gate there is unchanged and still never inspects
 architecture. Elsewhere the newest stable MuJoCo is the primary development and release
-profile—3.12.0 for the frozen 2026-08-22 snapshot. Exact 3.9.0 is the minimum profile; retained 3.10.0 and 3.11.0 results provide
+profile—3.17.0. Exact 3.9.0 is the minimum profile; retained 3.10.0, 3.11.0 and 3.12.0 results provide
 backward-compatibility evidence. Compilation always uses and records the exact admitted runtime.
 
 The package metadata has no artificial Python upper bound and the runtime does not reject an

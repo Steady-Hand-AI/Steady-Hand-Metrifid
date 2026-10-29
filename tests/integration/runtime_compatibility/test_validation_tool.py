@@ -242,3 +242,49 @@ def test_validator_publishes_fresh_canonical_json_without_clobbering(
     assert destination.read_bytes() == compatibility_tool._canonical_bytes(result) + b"\n"
     with pytest.raises(compatibility_tool.CompatibilityValidationError, match="replace"):
         compatibility_tool._write_result(tmp_path, result)
+
+
+@pytest.mark.parametrize(
+    ("role", "version"),
+    [
+        ("oldest_validated", "3.9.0"),
+        ("prior_validated", "3.10.0"),
+        ("current_validated", "3.11.0"),
+        ("retained_3_12_0", "3.12.0"),
+        ("latest_validated", "3.17.0"),
+    ],
+)
+def test_profile_roles_validate_the_latest_and_every_retained_version(
+    compatibility_tool: ModuleType, monkeypatch: pytest.MonkeyPatch, role: str, version: str
+) -> None:
+    """Every declared role reaches repeated measurement and binds its exact observed version."""
+    observation = _observation()
+    runtime = observation["runtime"]
+    exact = observation["exact_profile_tuple"]
+    assert isinstance(runtime, dict)
+    assert isinstance(exact, dict)
+    runtime["package_version"] = version
+    for key in ("package_version", "package_base_version", "native_version_string"):
+        exact[key] = version
+    major, minor, patch = map(int, version.split("."))
+    exact["native_version_integer"] = major * 1_000_000 + minor * 1_000 + patch
+    observation["exact_profile_tuple_sha256"] = compatibility_tool._sha256(exact)
+    calls = []
+
+    def measure() -> dict[str, object]:
+        calls.append(True)
+        return observation
+
+    monkeypatch.setattr(compatibility_tool, "_clean_process_observation", measure)
+    result = compatibility_tool.validate_profile(
+        profile_role=role, expected_version=version, measurement_count=2
+    )
+    assert len(calls) == 2
+    assert result["passed"] is True
+    assert result["profile_role"] == role
+    assert result["expected_mujoco_package_version"] == version
+    with pytest.raises(ValueError, match="profile_role does not match"):
+        compatibility_tool.validate_profile(
+            profile_role=role, expected_version="3.18.0", measurement_count=2
+        )
+    assert len(calls) == 2

@@ -53,8 +53,8 @@ false command qualification, even if physical evaluation qualified. A retained f
 not establish successful publication.
 
 Importing these public names, loading requests and reading saved results requires neither MuJoCo
-nor NumPy. Repair/replay execution separately requires Linux x86_64, CPython 3.13, MuJoCo 3.16.0 and
-NumPy 2.5.4. It adjusts an explicit 15-parameter controller only in the fixed planar pushing family;
+nor NumPy. Repair/replay execution separately requires Linux x86_64, CPython 3.13,
+MuJoCo 3.16.0 or 3.17.0 and NumPy 2.5.4. It adjusts an explicit 15-parameter controller only in the fixed planar pushing family;
 qualification is simulation only. For request fields, limits, outcome types, new output-directory
 rules and runnable SDK usage, see the [repair file workflow](repair.md#python-file-workflow).
 
@@ -92,15 +92,15 @@ Operating system  Linux or macOS with the required POSIX descriptor capabilities
 MuJoCo runtime    stable >=3.9, capability-based, no minor-version ceiling anywhere
 MuJoCo package    >=3.9,<3.11 on Darwin x86_64; >=3.9 with no ceiling elsewhere
 MuJoCo identity   package/native base and algorithmic native integer agree
-Validated exact   3.9.0, 3.10.0, 3.11.0, and 3.12.0
+Validated exact   3.9.0, 3.10.0, 3.11.0, 3.12.0, and 3.17.0
 NumPy             >= 1.26, with no runtime upper bound
 ```
 
 Upstream publishes no Intel macOS wheel for MuJoCo 3.11 or newer, so the package requirement is
 bounded on Darwin `x86_64` only; runtime admission is unchanged there. Elsewhere the
-resolver-selected newest stable MuJoCo is the primary development and release profile—3.12.0 for
-the frozen 2026-08-22 snapshot. Exact 3.9.0 is the supported minimum; retained 3.10.0 and 3.11.0
-profiles remain backward-compatibility evidence. SDK results bind the exact admitted runtime bytes.
+resolver-selected newest stable MuJoCo is the primary development and release profile—3.17.0.
+Exact 3.9.0 is the supported minimum; retained 3.10.0, 3.11.0 and 3.12.0 profiles remain
+backward-compatibility evidence. SDK results bind the exact admitted runtime bytes.
 
 Release evidence currently uses CPython because the exercised MuJoCo wheels target CPython. Other
 Python implementations are not claimed as validated, but Metrifid does not refuse solely because of

@@ -443,8 +443,8 @@ jobs:
 
       - name: MJB characterization (29 checks, lane-local)
         run: |
-          python tools/mjb_characterization.py > lane-evidence/mjb.log
-          cat lane-evidence/mjb.log
+          set -euo pipefail
+          python tools/mjb_characterization.py 2>&1 | tee lane-evidence/mjb.log
 
       - name: Installed repair journey on the supported runtime
         if: matrix.id == 'linux_x64_py313'
@@ -467,22 +467,23 @@ jobs:
           script = pathlib.Path("examples/repair/installed_smoke.py").resolve()
           scratch = pathlib.Path(os.environ["RUNNER_TEMP"]) / "metrifid-repair"
           scratch.mkdir()
-          venv = scratch / "venv"
-          python = venv / "bin/python"
-          environment = dict(os.environ)
-          environment.pop("PYTHONPATH", None)
-          environment["PATH"] = str(venv / "bin") + os.pathsep + environment["PATH"]
-          subprocess.run([sys.executable, "-m", "venv", str(venv)], env=environment, check=True)
-          subprocess.run(
-              [str(python), "-m", "pip", "install", str(wheel), "mujoco==3.16.0", "numpy==2.5.4"],
-              env=environment, check=True,
-          )
-          subprocess.run([str(python), "-m", "pip", "check"], env=environment, check=True)
-          subprocess.run(
-              [str(python), str(script), "--output", str(scratch / "journey"),
-               "--expected-version", version],
-              cwd=scratch, env=environment, check=True,
-          )
+          for mujoco_version in ("3.16.0", "3.17.0"):
+              venv = scratch / f"venv-{mujoco_version}"
+              python = venv / "bin/python"
+              environment = dict(os.environ)
+              environment.pop("PYTHONPATH", None)
+              environment["PATH"] = str(venv / "bin") + os.pathsep + environment["PATH"]
+              subprocess.run([sys.executable, "-m", "venv", str(venv)], env=environment, check=True)
+              subprocess.run(
+                  [str(python), "-m", "pip", "install", str(wheel), f"mujoco=={mujoco_version}", "numpy==2.5.4"],
+                  env=environment, check=True,
+              )
+              subprocess.run([str(python), "-m", "pip", "check"], env=environment, check=True)
+              subprocess.run(
+                  [str(python), str(script), "--output", str(scratch / f"journey-{mujoco_version}"),
+                   "--expected-version", version],
+                  cwd=scratch, env=environment, check=True,
+              )
           PY
 
       - name: Record blocking lane evidence
@@ -492,6 +493,7 @@ jobs:
           printf '%s\n' '${{ matrix.tier }}' > lane-evidence/tier.txt
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
         with:
           name: lane-${{ matrix.id }}
           path: lane-evidence/
@@ -644,8 +646,8 @@ jobs:
 
       - name: MJB characterization (29 checks, lane-local)
         run: |
-          python tools/mjb_characterization.py > lane-evidence/mjb.log
-          cat lane-evidence/mjb.log
+          set -euo pipefail
+          python tools/mjb_characterization.py 2>&1 | tee lane-evidence/mjb.log
 
       - name: Record blocking lane evidence
         run: |
@@ -654,6 +656,7 @@ jobs:
           printf '%s\n' 'full' > lane-evidence/tier.txt
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
         with:
           name: lane-linux_x64_py311_numpy_min
           path: lane-evidence/
@@ -673,6 +676,8 @@ jobs:
             mujoco: "3.10.0"
           - role: current_validated
             mujoco: "3.11.0"
+          - role: retained_3_12_0
+            mujoco: "3.12.0"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
@@ -780,6 +785,7 @@ jobs:
           printf '%s\n' '${{ matrix.role }}' > retained-evidence/profile_role.txt
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
         with:
           name: retained-${{ matrix.role }}
           path: retained-evidence/
@@ -888,8 +894,8 @@ jobs:
 
       - name: MJB characterization in the sdist environment
         run: |
-          python tools/mjb_characterization.py > sdist-evidence/mjb_sdist.log
-          cat sdist-evidence/mjb_sdist.log
+          set -euo pipefail
+          python tools/mjb_characterization.py 2>&1 | tee sdist-evidence/mjb_sdist.log
 
       - name: Wheel-only demo from the sdist installation
         run: |
@@ -901,6 +907,7 @@ jobs:
         run: cp release-artifacts/original_manifest.json sdist-evidence/original_manifest.json
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
         with:
           name: sdist-install-evidence
           path: sdist-evidence/

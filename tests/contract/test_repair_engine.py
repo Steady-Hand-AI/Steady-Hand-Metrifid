@@ -8,6 +8,7 @@ import math
 import struct
 from collections.abc import Callable
 from dataclasses import replace
+from types import SimpleNamespace
 
 import pytest
 
@@ -547,6 +548,73 @@ def test_partial_setup_cpu_interruption_keeps_actual_steps(harness: Harness) -> 
     assert result.costs.integration_steps == 73
     assert result.costs.attempts == 0
     assert not harness.calls
+
+
+def _runtime_modules(monkeypatch: pytest.MonkeyPatch, *, mujoco: str, numpy: str = "2.5.4") -> None:
+    monkeypatch.setattr(_engine, "_runtime", inspect_runtime)
+    monkeypatch.setattr(_engine.platform, "python_implementation", lambda: "CPython")
+    monkeypatch.setattr(_engine.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(_engine.platform, "machine", lambda: "x86_64")
+    monkeypatch.setattr(_engine.platform, "python_version", lambda: "3.13.5")
+    monkeypatch.setattr(_engine.sys, "version_info", (3, 13))
+    original_import = _engine.importlib.import_module
+
+    def import_native(name: str, package: str | None = None):
+        if name in ("mujoco", "numpy"):
+            return SimpleNamespace(__version__=mujoco if name == "mujoco" else numpy)
+        return original_import(name, package)
+
+    monkeypatch.setattr(_engine.importlib, "import_module", import_native)
+
+
+@pytest.mark.parametrize("mujoco", ["3.16.0", "3.17.0"])
+def test_exact_supported_runtimes_reach_repair_and_fresh_replay(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch, mujoco: str
+) -> None:
+    """Real admission retains each detected version through counted fake execution."""
+    _runtime_modules(monkeypatch, mujoco=mujoco)
+    harness.provider = lambda _parameters, finer, _index: measured(0.0, finer)
+    repaired = repair_controller(request())
+    assert repaired.status == "ALREADY_QUALIFIED"
+    assert repaired.runtime == {
+        "implementation": "CPython",
+        "python": "3.13.5",
+        "system": "Linux",
+        "machine": "x86_64",
+        "mujoco": mujoco,
+        "numpy": "2.5.4",
+    }
+    assert repaired.costs.known_completed_steps == 12200
+    replayed = replay_controller(repaired)
+    assert replayed.status == "QUALIFIED"
+    assert replayed.runtime == repaired.runtime
+    assert replayed.costs.known_completed_steps == 6200
+    assert len(harness.created) == 2
+    assert harness.invoked == 18400
+
+
+@pytest.mark.parametrize(
+    ("mujoco", "numpy"),
+    [
+        ("3.15.0", "2.5.4"),
+        ("3.16.1", "2.5.4"),
+        ("3.17.1", "2.5.4"),
+        ("3.17.0rc1", "2.5.4"),
+        ("3.17.0+vendor", "2.5.4"),
+        ("3.18.0", "2.5.4"),
+        ("3.17.0", "2.5.5"),
+    ],
+)
+def test_unlisted_runtime_versions_refuse_before_setup(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch, mujoco: str, numpy: str
+) -> None:
+    """Exact version support does not silently admit nearby or future versions."""
+    _runtime_modules(monkeypatch, mujoco=mujoco, numpy=numpy)
+    result = repair_controller(request())
+    assert result.status == "REFUSED"
+    assert result.reason == "UNSUPPORTED_RUNTIME"
+    assert not harness.created
+    assert harness.invoked == 0
 
 
 @pytest.mark.parametrize("failure", [ValueError, RuntimeError, KeyboardInterrupt])

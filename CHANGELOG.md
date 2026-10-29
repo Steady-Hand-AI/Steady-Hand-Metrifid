@@ -21,21 +21,35 @@ remain as an audit trail and do not define the current release version.
   work, including partial evaluations; unavailable work is not reported as zero. Qualification is
   simulation only, with no global-optimum, robustness or hardware-safety guarantee.
 - A public request example and an installed-console check exercise repair, reading and independent
-  replay on Linux x86_64 with CPython 3.13, MuJoCo 3.16.0 and NumPy 2.5.4. Existing CI and registry
-  verification use the same bounded check in a separate environment.
+  replay on Linux x86_64 with CPython 3.13, MuJoCo 3.16.0 or 3.17.0 and NumPy 2.5.4. Existing CI
+  and registry verification use the same bounded check in separate environments for both exact
+  MuJoCo versions.
 
 ### Changed
 
+- MuJoCo 3.17.0 is the primary core runtime, with characterized model-review coverage and
+  retained exact 3.9.0, 3.10.0, 3.11.0 and 3.12.0 profiles. Resolver-based installation and the
+  Intel macOS packaging bound remain unchanged.
+- Repair supports exact MuJoCo 3.16.0 and 3.17.0 on its existing Linux x86_64 / CPython 3.13 /
+  NumPy 2.5.4 lane. Saved 3.16 records remain readable; both versions record and replay their
+  actual runtime without a cross-version physical-equivalence guarantee.
 - Installation and command documentation include repair's supported runtime, request and saved-record
   schemas, finite limits, and human/JSON workflows. Ordinary help and public documentation replace
   the source-only consumer skill.
 - Generic `metrifid show` documentation now states its certification/model-release receipt scope;
   repair records use `metrifid repair show`.
 
+### Fixed
+
+- On MuJoCo 3.17, equivalent file-backed assets no longer produce false compiled differences
+  because their private snapshot directories differ. Compilation uses verified closure bytes
+  with stable relative asset identities; full-byte MJB comparison and self-contained asset
+  requirements remain intact.
+
 ### Unchanged
 
-- Core model-comparison commands, compiled-identity receipts and offline HTML reports retain their
-  existing interfaces and behavior. Repair publishes JSON bundles and no HTML report.
+- Core model-comparison command interfaces, compiled-identity receipt schemas and offline HTML
+  report formats remain unchanged. Repair publishes JSON bundles and no HTML report.
 - Core Python >=3.11 support and MuJoCo dependency markers, including the Intel macOS packaging
   bound, remain unchanged. Repair's exact runtime requirements apply only to its execution path.
 

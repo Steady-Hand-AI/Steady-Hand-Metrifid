@@ -48,7 +48,7 @@ speed criteria together with the whole-episode physical gates.
 
 `repair show` reads the saved result without MuJoCo or NumPy. `repair replay` performs a fresh
 paired evaluation of the selected controller from its retained bundle, without optimization.
-Repair and replay execute only on Linux x86_64 with CPython 3.13, MuJoCo 3.16.0 and NumPy 2.5.4.
+Repair and replay execute only on Linux x86_64 with CPython 3.13, MuJoCo 3.16.0 or 3.17.0 and NumPy 2.5.4.
 Those exact requirements do not narrow the core package's dependency markers.
 
 Requests configure finite attempt, integration-step and process-CPU limits. A run can return a
@@ -1227,7 +1227,7 @@ Python >=3.11, with no metadata upper bound
 MuJoCo runtime admission >=3.9, stable, capability-based, no minor-version ceiling
 MuJoCo Python package >=3.9,<3.11 on Darwin x86_64; >=3.9 with no ceiling elsewhere
 MuJoCo package/native base version and algorithmic native integer must agree
-MuJoCo exact validated profiles 3.9.0, 3.10.0, 3.11.0, and 3.12.0
+MuJoCo exact validated profiles 3.9.0, 3.10.0, 3.11.0, 3.12.0, and 3.17.0
 NumPy >=1.26, with no runtime upper bound
 ```
 
@@ -1239,7 +1239,7 @@ not a runtime check. Native Windows is unsupported; WSL is the documented route.
 
 `review-runtime` decides from retained evidence without starting a native worker;
 `run-runtime-review` separately measures and admits the two prepared external profiles it will run.
-Repair execution has its own exact Linux x86_64 / CPython 3.13 / MuJoCo 3.16.0 / NumPy 2.5.4 lane.
+Repair execution has its own exact Linux x86_64 / CPython 3.13 / MuJoCo 3.16.0 or 3.17.0 / NumPy 2.5.4 lane.
 Help, repair request admission and saved repair reading are native-free.
 
 For the core gate, stable future releases are admitted only when their measured operation

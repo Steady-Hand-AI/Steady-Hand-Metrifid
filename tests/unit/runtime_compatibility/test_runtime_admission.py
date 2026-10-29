@@ -382,3 +382,34 @@ def test_malformed_actuator_dimensions_fail_closed_before_semantic_projection(
         )
     assert caught.value.reason is OperationalReasonCode.MUJOCO_FEATURE_COVERAGE_INCOMPLETE
     assert caught.value.evidence["unsupported_features"]["measurement_issues"]
+
+
+@pytest.mark.parametrize("missing", ["MjVfs", "__enter__", "__exit__", "__setitem__"])
+def test_missing_snapshot_vfs_capability_refuses_every_compile_surface(missing: str) -> None:
+    """Require the path-preserving input boundary before any model compilation."""
+    if missing == "MjVfs":
+        proxy = _RuntimeProxy(MjVfs=None)
+        expected = {"MjVfs", "MjVfs.__enter__", "MjVfs.__exit__", "MjVfs.__setitem__"}
+    else:
+
+        class IncompleteVfs:
+            """Supply the complete callable surface before removing exactly one method."""
+
+            def __enter__(self) -> object:
+                """Return the unused context fixture."""
+                return self
+
+            def __exit__(self, *args: object) -> None:
+                """Provide the unused context-exit capability."""
+
+            def __setitem__(self, key: str, value: bytes) -> None:
+                """Provide the unused buffer-registration capability."""
+
+        setattr(IncompleteVfs, missing, None)
+        proxy = _RuntimeProxy(MjVfs=IncompleteVfs)
+        expected = {f"MjVfs.{missing}"}
+    for surface in MujocoClaimSurface:
+        with pytest.raises(ModelAdmissionRefusal) as caught:
+            admit_mujoco_runtime(surface, runtime_module=proxy)
+        assert caught.value.reason is OperationalReasonCode.MUJOCO_RUNTIME_CAPABILITY_MISSING
+        assert set(caught.value.evidence["missing_capabilities"]) == expected

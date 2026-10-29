@@ -10,15 +10,17 @@ impossible.
 
 ## Prepare the supported runtime
 
-Repair and replay require **Linux x86_64, CPython 3.13, MuJoCo 3.16.0 and NumPy 2.5.4**. Prepare an
-isolated environment yourself and install the supported package versions:
+Repair and replay require **Linux x86_64, CPython 3.13, MuJoCo 3.16.0 or 3.17.0 and NumPy 2.5.4**.
+Prepare an isolated environment yourself and install the supported package versions:
 
 ```bash
 python3.13 -m venv .venv-repair
 . .venv-repair/bin/activate
-python -m pip install 'metrifid==0.9.0' 'mujoco==3.16.0' 'numpy==2.5.4'
+python -m pip install 'metrifid==0.9.0' 'mujoco==3.17.0' 'numpy==2.5.4'
 metrifid repair --help
 ```
+
+MuJoCo 3.16.0 remains supported for repair; use `mujoco==3.16.0` in the same isolated recipe.
 
 These pins apply to repair execution; the core package retains Python >=3.11 and its broader
 platform-dependent MuJoCo requirements. Metrifid does not install or discover execution
@@ -228,15 +230,21 @@ A nonfinite/unavailable measured metric is stored as `null`, with an incomplete/
 and its field path in `unavailable_measurements`. Request and selected-vector invalidity is
 refused, never repaired by this replacement. Missing measurement records stay `null`.
 
-The `limitations` array contains these exact three strings:
+New records use these exact three strings in `limitations`:
 
 ```json
 [
   "Simulation only.",
-  "Only planar_push_timed15_v1 on Linux x86_64, CPython 3.13, MuJoCo 3.16.0 and NumPy 2.5.4.",
+  "Only planar_push_timed15_v1 on Linux x86_64, CPython 3.13, MuJoCo 3.16.0 or 3.17.0 and NumPy 2.5.4.",
   "No global-optimum, robustness, authorship or cross-platform bitwise replay guarantee."
 ]
 ```
+
+The reader also accepts the exact legacy array whose second string names only MuJoCo 3.16.0.
+This preserves older 3.16 records and refusals with incomplete runtime information. A record of
+actual 3.17 execution must use the new array. Other limitation text is refused. Each run and
+replay records its actual execution runtime; support for both versions does not promise physical
+equivalence across versions.
 
 ### CLI summary
 

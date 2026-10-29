@@ -5,7 +5,10 @@ The harness compiles synthetic MJCF fixtures, serializes every byte returned by
 ``mj_saveModel``, and checks determinism, relocation, neutral-source refactors,
 physical perturbations, and known complete-MJB over-sensitivity. Supplying
 ``--model`` adds repeated-compilation and relocation checks for one real MJCF
-entrypoint.
+entrypoint. Neutral, physical and visual edits reuse one source location so an
+incidental directory change cannot satisfy a sensitivity check. Direct filesystem
+relocation is characterized separately: MuJoCo 3.17 and newer serialize resolved
+asset paths, while earlier supported releases serialize authored asset tokens.
 """
 
 from __future__ import annotations
@@ -226,13 +229,29 @@ def run_determinism(matrix: Matrix, temporary_root: str) -> None:
     relocated = mjb_bytes(os.path.join(relocated_root, "model.xml"))
     offset, count = first_difference(serialized, relocated)
     note = "" if relocated == serialized else f"first diff at byte {offset}, {count} bytes differ"
-    matrix.add("determinism", "relocated to a different absolute path", relocated == serialized, note)
-    matrix.add("determinism", "MJB size is stable", len(relocated) == len(serialized), f"{len(serialized)} bytes")
+    resolved_paths = mujoco.mj_version() >= 3_017_000
+    expected_equal = not resolved_paths
+    matrix.add(
+        "filesystem asset identity",
+        "relocation follows native path serialization",
+        (relocated == serialized) == expected_equal,
+        f"expected_equal={expected_equal}; {note}",
+    )
+    expected_size_delta = (
+        len(os.fsencode(relocated_root)) - len(os.fsencode(root)) if resolved_paths else 0
+    )
+    matrix.add(
+        "filesystem asset identity",
+        "relocation size follows serialized path length",
+        len(relocated) - len(serialized) == expected_size_delta,
+        f"{len(serialized)} -> {len(relocated)} bytes; expected delta={expected_size_delta}",
+    )
 
 
 def run_neutral_refactors(matrix: Matrix, temporary_root: str) -> None:
     """Check source refactors that must compile to the same complete MJB artifact."""
-    base = mjb_digest(build_tree(os.path.join(temporary_root, "neutral_base")))
+    root = os.path.join(temporary_root, "neutral")
+    base = mjb_digest(build_tree(root))
     wrapped = MODEL_XML.replace(
         '<geom name="g1" type="capsule" fromto="0 0 0 0 0 -0.4" size="0.05" mass="0.734"/>',
         '<geom name="g1"\n              type="capsule"\n              fromto="0 0 0 0 0 -0.4"'
@@ -250,16 +269,22 @@ def run_neutral_refactors(matrix: Matrix, temporary_root: str) -> None:
         "attributes hoisted into <default>": DEFAULTS_XML,
     }
     for label, text in cases.items():
-        token = label.replace(" ", "_").replace("<", "").replace(">", "")
-        digest = mjb_digest(build_tree(os.path.join(temporary_root, f"neutral_{token}"), model_text=text))
+        digest = mjb_digest(build_tree(root, model_text=text))
         matrix.add("behavior-neutral refactors", label, digest == base)
-    renamed = mjb_digest(build_tree(os.path.join(temporary_root, "neutral_meshdir"), meshdir="assets"))
-    matrix.add("behavior-neutral refactors", "meshdir renamed", renamed == base)
+    renamed = mjb_digest(build_tree(root, meshdir="assets"))
+    expected_equal = mujoco.mj_version() < 3_017_000
+    matrix.add(
+        "filesystem asset identity",
+        "meshdir rename follows native path serialization",
+        (renamed == base) == expected_equal,
+        f"expected_equal={expected_equal}",
+    )
 
 
 def run_sensitivity(matrix: Matrix, temporary_root: str) -> None:
     """Check small physical or solver changes that must alter complete MJB identity."""
-    base = mjb_digest(build_tree(os.path.join(temporary_root, "sensitivity_base")))
+    root = os.path.join(temporary_root, "sensitivity")
+    base = mjb_digest(build_tree(root))
     edits = {
         "body mass +0.0136%": ('mass="0.734"', 'mass="0.7341"'),
         "joint damping": ('damping="0.11"', 'damping="0.1100001"'),
@@ -282,33 +307,27 @@ def run_sensitivity(matrix: Matrix, temporary_root: str) -> None:
         text = MODEL_XML.replace(old, new)
         if text == MODEL_XML:
             raise AssertionError(f"edit {label!r} did not apply")
-        token = re_safe_token(label)
-        digest = mjb_digest(build_tree(os.path.join(temporary_root, f"sensitivity_{token}"), model_text=text))
+        digest = mjb_digest(build_tree(root, model_text=text))
         matrix.add("physical sensitivity", label, digest != base)
     friction = mjb_digest(
         build_tree(
-            os.path.join(temporary_root, "sensitivity_friction"),
+            root,
             assets_text=ASSETS_XML.replace("0.7 0.05 0.01", "0.7000001 0.05 0.01"),
         )
     )
     matrix.add("physical sensitivity", "geom friction via include", friction != base)
-    mesh = mjb_digest(
-        build_tree(
-            os.path.join(temporary_root, "sensitivity_mesh"),
-            stl=tetrahedron_stl((0.0, 0.0, 1.0001)),
-        )
-    )
+    mesh_path = build_tree(root, stl=tetrahedron_stl((0.0, 0.0, 1.0001)))
+    # Filesystem resources use whole-second modification timestamps in the asset cache.
+    # Reload the changed bytes even when this same-path fixture edit shares that timestamp.
+    mujoco.mj_clearCache(mujoco.mj_getCache())
+    mesh = mjb_digest(mesh_path)
     matrix.add("physical sensitivity", "mesh vertex moved", mesh != base)
-
-
-def re_safe_token(value: str) -> str:
-    """Convert a human-readable case label into a deterministic directory token."""
-    return "".join(character if character.isalnum() else "_" for character in value).strip("_")
 
 
 def run_oversensitivity(matrix: Matrix, temporary_root: str) -> None:
     """Document non-dynamic edits that intentionally break exact complete-MJB identity."""
-    base = mjb_digest(build_tree(os.path.join(temporary_root, "oversensitivity_base")))
+    root = os.path.join(temporary_root, "oversensitivity")
+    base = mjb_digest(build_tree(root))
     cases = {
         "rgba visual only": MODEL_XML.replace(
             'size="0.05" mass="0.734"', 'size="0.05" mass="0.734" rgba="1 0 0 1"'
@@ -319,20 +338,21 @@ def run_oversensitivity(matrix: Matrix, temporary_root: str) -> None:
         ),
     }
     for label, text in cases.items():
-        digest = mjb_digest(
-            build_tree(os.path.join(temporary_root, f"oversensitivity_{re_safe_token(label)}"), model_text=text)
-        )
+        digest = mjb_digest(build_tree(root, model_text=text))
         matrix.add("known over-sensitivity", label, digest != base)
-    renamed = mjb_digest(
-        build_tree(os.path.join(temporary_root, "oversensitivity_meshfile"), meshfile="renamed_part.stl")
-    )
+    renamed = mjb_digest(build_tree(root, meshfile="renamed_part.stl"))
     matrix.add("known over-sensitivity", "mesh filename changed", renamed != base)
 
 
 def run_real_model(matrix: Matrix, temporary_root: str, model_path: str) -> None:
     """Check repeated compilation and relocation for one real model closure."""
+    model_path = os.path.abspath(model_path)
     digests = {mjb_digest(model_path) for _ in range(5)}
-    matrix.add("real model closure", f"5 compiles stable: {os.path.basename(model_path)}", len(digests) == 1)
+    matrix.add(
+        "real model closure",
+        f"5 compiles stable: {os.path.basename(model_path)}",
+        len(digests) == 1,
+    )
     source_root = os.path.dirname(os.path.abspath(model_path))
     relocated_root = os.path.join(temporary_root, "real", "relocated_model_root")
     os.makedirs(os.path.dirname(relocated_root), exist_ok=True)
@@ -340,8 +360,22 @@ def run_real_model(matrix: Matrix, temporary_root: str, model_path: str) -> None
     relocated_path = os.path.join(relocated_root, os.path.basename(model_path))
     original, relocated = mjb_bytes(model_path), mjb_bytes(relocated_path)
     offset, count = first_difference(original, relocated)
-    note = f"{len(original)} bytes" if original == relocated else f"first diff at byte {offset}, {count} differ"
-    matrix.add("real model closure", "relocated to a different absolute path", original == relocated, note)
+    note = (
+        f"{len(original)} bytes"
+        if original == relocated
+        else f"first diff at byte {offset}, {count} differ"
+    )
+    # Absolute authored references can keep pointing to the original tree. Compare the
+    # native asset identities before declaring what relocation should do to all MJB bytes.
+    original_paths = mujoco.MjModel.from_xml_path(model_path).paths
+    relocated_paths = mujoco.MjModel.from_xml_path(relocated_path).paths
+    expected_equal = original_paths == relocated_paths
+    matrix.add(
+        "real model closure",
+        "relocation follows native path serialization",
+        (original == relocated) == expected_equal,
+        f"expected_equal={expected_equal}; {note}",
+    )
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:

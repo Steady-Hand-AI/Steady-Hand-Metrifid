@@ -24,6 +24,8 @@ from ._types import EngineResult, ExecutionCosts, PairedMeasurement, ReplayResul
 if TYPE_CHECKING:
     from ._physics import Backend
 
+_SUPPORTED_MUJOCO_VERSIONS = ("3.16.0", "3.17.0")
+
 
 class _Interrupted(Exception):
     """A cooperative limit or unknown measurement prevents completion."""
@@ -98,7 +100,8 @@ def _runtime() -> dict[str, str]:
         or versions["machine"] != "x86_64"
     ):
         raise _RuntimeRefused("Requires Linux x86_64 and CPython 3.13")
-    for name, expected in (("mujoco", "3.16.0"), ("numpy", "2.5.4")):
+    for name, supported in (("mujoco", _SUPPORTED_MUJOCO_VERSIONS), ("numpy", ("2.5.4",))):
+        expected = " or ".join(supported)
         try:
             module = importlib.import_module(name)
         except Exception as exc:
@@ -107,7 +110,7 @@ def _runtime() -> dict[str, str]:
             ) from exc
         actual = str(getattr(module, "__version__", "unknown"))
         versions[name] = actual
-        if actual != expected:
+        if actual not in supported:
             raise _RuntimeRefused(f"Requires {name} {expected}; found {actual}")
     return versions
 
@@ -365,8 +368,8 @@ def _finish(
 def repair_controller(request: RepairRequest) -> EngineResult:
     """Repair one admitted controller with bounded cyclic coordinate polling.
 
-    Native execution requires Linux x86_64, CPython 3.13, MuJoCo 3.16.0 and
-    NumPy 2.5.4. One process-CPU clock includes native imports, setup and every
+    Native execution requires Linux x86_64, CPython 3.13, MuJoCo 3.16.0 or
+    3.17.0 and NumPy 2.5.4. One process-CPU clock includes native imports, setup and every
     evaluation. Search stops at 75% of the cap; confirmation uses the full cap.
     Expected input/runtime refusals and execution outcomes are returned as data.
     KeyboardInterrupt and SystemExit propagate to the caller.

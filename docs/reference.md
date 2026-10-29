@@ -51,8 +51,8 @@ The five model commands — `certify`, `review-model`, `compare`, `audit-timeste
 Python 3.11 or newer with no upper bound,
 Linux or macOS with the required POSIX capabilities, no architecture allowlist, a stable MuJoCo
 package at or above 3.9 whose native string and integer encode the same three-part base version,
-and NumPy 1.26 or newer with no upper bound. Exact stable profiles `3.9.0` through `3.12.0` are
-retained-validated. A later stable runtime is admitted only by measured operation capabilities and
+and NumPy 1.26 or newer with no upper bound. Exact stable profiles `3.9.0`, `3.10.0`, `3.11.0`,
+`3.12.0` and `3.17.0` are validated. A later stable runtime is admitted only by measured operation capabilities and
 is labeled capability-compatible rather than validated. The runtime does not reject an interpreter
 implementation by name. Native Windows is unsupported; use WSL.
 
@@ -72,7 +72,7 @@ frozen worker in each, and never substitutes the installed process's admission f
 profile-specific measurements. Neither route discovers, installs, selects, upgrades or repairs an
 environment.
 
-`repair run` and `repair replay` require Linux x86_64, CPython 3.13, MuJoCo 3.16.0 and NumPy 2.5.4.
+`repair run` and `repair replay` require Linux x86_64, CPython 3.13, MuJoCo 3.16.0 or 3.17.0 and NumPy 2.5.4.
 This is a separate, narrower execution envelope; it does not change the core dependency markers.
 Repair help, request admission and saved-result reading import neither MuJoCo nor NumPy.
 
@@ -494,14 +494,15 @@ Intel macOS wheel at or above 3.11, and `mujoco>=3.9` with no ceiling elsewhere;
 dependency-resolution marker, not a runtime gate. Only stable three-component
 versions (optionally carrying a post or local suffix) are considered; prerelease and development
 forms refuse. The package base, native version string, and algorithmically encoded native integer
-must agree exactly. The retained validated profiles are 3.9.0, 3.10.0, 3.11.0, and 3.12.0. A later
-stable release can be capability-admitted but is explicitly unvalidated. NumPy is `>=1.26` with no
+must agree exactly. The primary validated profile is 3.17.0; retained exact profiles are 3.9.0,
+3.10.0, 3.11.0 and 3.12.0. A later stable release can be capability-admitted but is explicitly
+unvalidated. NumPy is `>=1.26` with no
 runtime upper bound and no runtime version gate.
 
 On platforms carrying no packaging ceiling, the resolver-selected newest stable MuJoCo is the
-primary development and release authority—3.12.0 for the frozen 2026-08-22 snapshot; on Darwin
-`x86_64` the resolver selects the newest stable release below 3.11. Exact 3.9.0 remains the minimum profile; 3.10.0 and 3.11.0 are
-retained backward-compatibility profiles. Evidence binds the exact admitted package/native identity.
+primary development and release authority—3.17.0; on Darwin `x86_64` the resolver selects the
+newest stable release below 3.11. Exact 3.9.0 remains the minimum profile; 3.10.0, 3.11.0 and 3.12.0
+are retained backward-compatibility profiles. Evidence binds the exact admitted package/native identity.
 
 Capability admission is operation-specific. `certify` needs only compiled-artifact capabilities;
 `review-model` additionally requires a cataloged complete public-field surface; and dynamic replay
@@ -523,7 +524,7 @@ A certification receipt is runtime-bound. It records the runtime identity that p
 artifacts and claims only what that runtime produced; it does not claim that another operating
 system, MuJoCo version or build would produce the same digest.
 
-Repair execution uses the narrower Linux x86_64 / CPython 3.13 / MuJoCo 3.16.0 / NumPy 2.5.4
+Repair execution uses the narrower Linux x86_64 / CPython 3.13 / MuJoCo 3.16.0 or 3.17.0 / NumPy 2.5.4
 envelope described in the [repair guide](repair.md). Package metadata and the core support
 envelope above are unchanged.
 
