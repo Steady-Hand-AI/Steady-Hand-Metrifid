@@ -6,7 +6,7 @@ conditions, permissions, environments, action pins, step order and asset paths.
 
 Structure alone is not enough. A step can contain the right words and still decide the wrong way, so
 every decision-bearing validator embedded in the workflow is extracted and executed here against
-small temporary fixtures, positive and negative. Where a validator is repeated in more than one
+temporary fixtures, including large workflow responses, positive and negative. Where a validator is repeated in more than one
 protected job, every copy is executed, because proving only the first copy proves nothing about the
 others. Network calls are replaced by an injected stub, so the real decision logic runs offline
 without the workflow carrying any test-only branch.
@@ -536,7 +536,21 @@ def _promotion_fixture(
     workflow_sha: str = FIXTURE_WORKFLOW_SHA,
     digest_override: str | None = None,
     sums_lines: int = 2,
+    workflow_content: str | None = None,
 ) -> None:
+    import base64
+
+    (root / "workflow-response.json").write_text(
+        json.dumps(
+            {
+                "encoding": "base64",
+                "content": base64.b64encode(FIXTURE_WORKFLOW).decode("ascii")
+                if workflow_content is None
+                else workflow_content,
+            }
+        ),
+        encoding="utf-8",
+    )
     artifacts = root / "release-artifacts"
     dist = artifacts / "dist"
     dist.mkdir(parents=True, exist_ok=True)
@@ -570,8 +584,6 @@ def _promotion_fixture(
 
 
 def _identity_environment(**overrides: str) -> dict[str, str]:
-    import base64
-
     environment = {
         "RELEASE_VERSION": FIXTURE_VERSION,
         "PLANNED_TAG": FIXTURE_VERSION,
@@ -580,8 +592,7 @@ def _identity_environment(**overrides: str) -> dict[str, str]:
         "GITHUB_REPOSITORY": FIXTURE_REPOSITORY,
         "PUBLIC_MAIN_HEAD": FIXTURE_COMMIT,
         "REMOTE_TREE": FIXTURE_TREE,
-        "REMOTE_WORKFLOW_B64": base64.b64encode(FIXTURE_WORKFLOW).decode("ascii"),
-        "REMOTE_WORKFLOW_ENCODING": "base64",
+        "REMOTE_WORKFLOW_FILE": "workflow-response.json",
         "TAG_OBJECT_TYPE": "tag",
         "TAG_PEELED": FIXTURE_COMMIT,
         "TAG_PEELED_TYPE": "commit",
@@ -614,7 +625,7 @@ IDENTITY_RED_CASES = [
     pytest.param({"GITHUB_REPOSITORY": "other/repo"}, {}, id="repository_mismatch"),
     pytest.param({"REMOTE_TREE": "c" * 40}, {}, id="public_tree_disagrees"),
     pytest.param({"REMOTE_TREE": "not-an-oid"}, {}, id="public_tree_malformed"),
-    pytest.param({"REMOTE_WORKFLOW_B64": ""}, {}, id="public_workflow_empty"),
+    pytest.param({}, {"workflow_content": ""}, id="public_workflow_empty"),
     pytest.param({}, {"tree": "9" * 40}, id="manifest_tree_wrong_but_nonempty"),
     pytest.param({}, {"workflow_sha": "9" * 64}, id="manifest_workflow_wrong_but_nonempty"),
     pytest.param({}, {"digest_override": "0" * 64}, id="stored_hash_tampered"),
@@ -1585,6 +1596,11 @@ def _identity_gh_fixture(**overrides: str) -> dict[str, Any]:
         f"api repos/{repository}/commits/{FIXTURE_COMMIT} --jq .commit.tree.sha": {
             "stdout": tree + "\n"
         },
+        f"api repos/{repository}/contents/.github/workflows/publish.yml?ref={FIXTURE_COMMIT}": {
+            "stdout": json.dumps({"encoding": encoding, "content": content}) + "\n"
+        },
+        # Selector responses let a regressed acquisition reach the subprocess-size boundary.
+        # The observed-call assertion still requires one complete response.
         f"api repos/{repository}/contents/.github/workflows/publish.yml?ref={FIXTURE_COMMIT} --jq .content": {
             "stdout": content + "\n"
         },
@@ -1639,8 +1655,7 @@ def _expected_identity_calls() -> list[list[str]]:
         ["api", f"repos/{repository}", "--jq", ".default_branch"],
         ["api", f"repos/{repository}/commits/main", "--jq", ".sha"],
         ["api", f"repos/{repository}/commits/{commit}", "--jq", ".commit.tree.sha"],
-        ["api", contents, "--jq", ".content"],
-        ["api", contents, "--jq", ".encoding"],
+        ["api", contents],
         ["api", f"repos/{repository}/git/ref/tags/{FIXTURE_VERSION}", "--jq", ".object.type"],
         ["api", f"repos/{repository}/git/ref/tags/{FIXTURE_VERSION}", "--jq", ".object.sha"],
         ["api", f"repos/{repository}/git/tags/{tag_object}", "--jq", ".object.sha"],
@@ -1648,8 +1663,15 @@ def _expected_identity_calls() -> list[list[str]]:
     ]
 
 
+@pytest.mark.parametrize(
+    "workflow_bytes",
+    [
+        pytest.param(FIXTURE_WORKFLOW, id="small_workflow"),
+        pytest.param(b"# workflow response\n" * 11000, id="large_workflow_over_200_KiB"),
+    ],
+)
 def test_every_identity_copy_makes_the_exact_public_calls_in_order(
-    jobs: dict[str, Any], tmp_path: Path
+    jobs: dict[str, Any], tmp_path: Path, workflow_bytes: bytes
 ) -> None:
     """The acquisition shell itself is executed, and its complete calls are compared in order.
 
@@ -1657,16 +1679,27 @@ def test_every_identity_copy_makes_the_exact_public_calls_in_order(
     the manifest or another locally available value fails here even when a different selector still
     queries the same endpoint.
     """
+    import base64
+
+    encoded = base64.b64encode(workflow_bytes).decode("ascii")
+    wrapped = "\n".join(encoded[i : i + 60] for i in range(0, len(encoded), 60)) + "\n"
     expected = _expected_identity_calls()
     for label, script in _identity_shell_scripts(jobs):
         workdir = tmp_path / f"acq-{label}"
         workdir.mkdir()
-        _promotion_fixture(workdir)
+        _promotion_fixture(workdir, workflow_sha=hashlib.sha256(workflow_bytes).hexdigest())
+        temporary = workdir / "runner-temp"
+        temporary.mkdir()
+        unrelated = temporary / "keep.txt"
+        unrelated.write_text("unrelated", encoding="utf-8")
         done, observed = _run_step_shell(
-            script, workdir, _identity_shell_environment(), _identity_gh_fixture()
+            script, workdir, _identity_shell_environment(), _identity_gh_fixture(content=wrapped)
         )
         assert done.returncode == 0, (label, done.stdout + done.stderr)
+        assert "public identity and stored bytes agree" in done.stdout, (label, done.stdout)
         assert observed == expected, (label, observed)
+        assert list(temporary.iterdir()) == [unrelated], label
+        assert unrelated.read_text(encoding="utf-8") == "unrelated", label
 
 
 @pytest.mark.parametrize(
@@ -1712,6 +1745,8 @@ def test_every_identity_copy_decodes_the_workflow_strictly(
             script, workdir, _identity_shell_environment(), _identity_gh_fixture(content=content)
         )
         assert done.returncode != 0, (label, done.stdout)
+        assert "not decodable" in done.stderr, (label, done.stderr)
+        assert list((workdir / "runner-temp").iterdir()) == [], label
 
 
 def test_a_multi_line_base64_workflow_content_still_decodes(
@@ -1732,6 +1767,110 @@ def test_a_multi_line_base64_workflow_content_still_decodes(
         script, workdir, _identity_shell_environment(), _identity_gh_fixture(content=wrapped)
     )
     assert done.returncode == 0, done.stdout + done.stderr
+
+
+def test_every_identity_copy_rejects_a_large_response_with_the_wrong_digest(
+    jobs: dict[str, Any], tmp_path: Path
+) -> None:
+    """A large successful transport still has to prove the complete workflow digest."""
+    import base64
+
+    encoded = base64.b64encode(b"# workflow response\n" * 11000).decode("ascii")
+    wrapped = "\n".join(encoded[i : i + 60] for i in range(0, len(encoded), 60)) + "\n"
+    for label, script in _identity_shell_scripts(jobs):
+        workdir = tmp_path / label
+        workdir.mkdir()
+        _promotion_fixture(workdir)
+        done, observed = _run_step_shell(
+            script, workdir, _identity_shell_environment(), _identity_gh_fixture(content=wrapped)
+        )
+        assert done.returncode != 0, (label, done.stdout)
+        assert "is not the public workflow digest" in done.stderr, (label, done.stderr)
+        assert observed == _expected_identity_calls(), (label, observed)
+        assert list((workdir / "runner-temp").iterdir()) == [], label
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        pytest.param("{", id="invalid_json"),
+        pytest.param("[]", id="not_an_object"),
+        pytest.param('{"content": "YQ=="}', id="missing_encoding"),
+        pytest.param('{"encoding": "base64"}', id="missing_content"),
+        pytest.param('{"encoding": null, "content": "YQ=="}', id="null_encoding"),
+        pytest.param('{"encoding": 1, "content": "YQ=="}', id="integer_encoding"),
+        pytest.param('{"encoding": "base64", "content": null}', id="null_content"),
+        pytest.param('{"encoding": "base64", "content": true}', id="boolean_content"),
+        pytest.param('{"encoding": "base64", "content": ["YQ=="]}', id="array_content"),
+    ],
+)
+def test_every_identity_copy_refuses_a_malformed_contents_response(
+    jobs: dict[str, Any], tmp_path: Path, response: str
+) -> None:
+    """The file boundary admits a JSON object with two string fields only."""
+    for label, script in _identity_shell_scripts(jobs):
+        workdir = tmp_path / label
+        workdir.mkdir()
+        _promotion_fixture(workdir)
+        fixture = _identity_gh_fixture()
+        endpoint = (
+            f"api repos/{FIXTURE_REPOSITORY}/contents/.github/workflows/publish.yml"
+            f"?ref={FIXTURE_COMMIT}"
+        )
+        fixture[endpoint] = {"stdout": response}
+        done, observed = _run_step_shell(script, workdir, _identity_shell_environment(), fixture)
+        assert done.returncode != 0, (label, done.stdout)
+        assert "the public workflow" in done.stderr, (label, done.stderr)
+        assert "public identity and stored bytes agree" not in done.stdout, label
+        assert observed == _expected_identity_calls(), (label, observed)
+        assert list((workdir / "runner-temp").iterdir()) == [], label
+
+
+@pytest.mark.parametrize("failure", ["missing", "directory", "invalid_utf8"])
+def test_every_identity_validator_refuses_an_unreadable_response(
+    jobs: dict[str, Any], tmp_path: Path, failure: str
+) -> None:
+    """Missing, unreadable or undecodable response files cannot establish identity."""
+    for label, code in _identity_sources(jobs):
+        workdir = tmp_path / label
+        workdir.mkdir()
+        _promotion_fixture(workdir)
+        response = workdir / "workflow-response.json"
+        response.unlink()
+        if failure == "directory":
+            response.mkdir()
+        elif failure == "invalid_utf8":
+            response.write_bytes(b"\xff")
+        done = _run_validator(code, workdir, _identity_environment())
+        assert done.returncode != 0, (label, done.stdout)
+        assert "the public workflow response is unreadable JSON" in done.stderr, label
+
+
+def test_every_identity_copy_cleans_up_and_stops_when_contents_acquisition_fails(
+    jobs: dict[str, Any], tmp_path: Path
+) -> None:
+    """A failed API response stops before Python and removes only its owned temporary file."""
+    for label, script in _identity_shell_scripts(jobs):
+        workdir = tmp_path / label
+        workdir.mkdir()
+        _promotion_fixture(workdir)
+        temporary = workdir / "runner-temp"
+        temporary.mkdir()
+        unrelated = temporary / "keep.txt"
+        unrelated.write_text("unrelated", encoding="utf-8")
+        fixture = _identity_gh_fixture()
+        endpoint = (
+            f"api repos/{FIXTURE_REPOSITORY}/contents/.github/workflows/publish.yml"
+            f"?ref={FIXTURE_COMMIT}"
+        )
+        fixture[endpoint] = {"stdout": "{", "stderr": "contents acquisition failed", "exit": 42}
+        done, observed = _run_step_shell(script, workdir, _identity_shell_environment(), fixture)
+        assert done.returncode == 42, (label, done.stdout + done.stderr)
+        assert "contents acquisition failed" in done.stderr, label
+        assert "public identity and stored bytes agree" not in done.stdout, label
+        assert observed == _expected_identity_calls()[:4], (label, observed)
+        assert list(temporary.iterdir()) == [unrelated], label
+        assert unrelated.read_text(encoding="utf-8") == "unrelated", label
 
 
 # ---- Executing the release-state route offline -----------------------------------------------------------

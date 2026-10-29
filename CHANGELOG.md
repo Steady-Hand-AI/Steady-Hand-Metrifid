@@ -4,7 +4,10 @@ Notable changes to `metrifid`. Starting with `0.2.0`, release identifiers use ex
 dot-separated integer components: `MAJOR.MINOR.PATCH`. Historical development entries below
 remain as an audit trail and do not define the current release version.
 
-## 0.9.0
+## 0.9.1
+
+Version 0.9.0 was tagged but was not published to PyPI or TestPyPI. The changes below
+include the complete release since 0.8.0.
 
 ### Added
 
@@ -41,6 +44,8 @@ remain as an audit trail and do not define the current release version.
 
 ### Fixed
 
+- Release publication reads workflow verification responses from a temporary file, avoiding
+  process environment size limits while preserving the existing identity and digest checks.
 - On MuJoCo 3.17, equivalent file-backed assets no longer produce false compiled differences
   because their private snapshot directories differ. Compilation uses verified closure bytes
   with stable relative asset identities; full-byte MJB comparison and self-contained asset

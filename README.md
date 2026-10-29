@@ -17,7 +17,7 @@ model.
 
 Project links: [repository](https://github.com/Steady-Hand-AI/Steady-Hand-Metrifid) · [documentation](https://github.com/Steady-Hand-AI/Steady-Hand-Metrifid/blob/main/docs/getting_started.md) · [issues](https://github.com/Steady-Hand-AI/Steady-Hand-Metrifid/issues) · [changelog](https://github.com/Steady-Hand-AI/Steady-Hand-Metrifid/blob/main/CHANGELOG.md) · [security reporting](https://github.com/Steady-Hand-AI/Steady-Hand-Metrifid/security/advisories/new)
 
-Metrifid 0.9.0 also provides [planar controller repair](https://github.com/Steady-Hand-AI/Steady-Hand-Metrifid/blob/main/docs/repair.md): adjust an explicit starting controller, retain its measured result and independently replay it. Qualification is simulation only, for one fixed planar pushing family and the supported runtime.
+Metrifid 0.9.1 also provides [planar controller repair](https://github.com/Steady-Hand-AI/Steady-Hand-Metrifid/blob/main/docs/repair.md): adjust an explicit starting controller, retain its measured result and independently replay it. Qualification is simulation only, for one fixed planar pushing family and the supported runtime.
 
 ## Start with the change you made
 
@@ -75,7 +75,7 @@ Prepare Linux x86_64 with CPython 3.13:
 ```bash
 python3.13 -m venv .venv-repair
 . .venv-repair/bin/activate
-python -m pip install 'metrifid==0.9.0' 'mujoco==3.17.0' 'numpy==2.5.4'
+python -m pip install 'metrifid==0.9.1' 'mujoco==3.17.0' 'numpy==2.5.4'
 metrifid repair --help
 ```
 
@@ -215,7 +215,7 @@ out the models first, then run the action:
 ```yaml
 - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 - id: certify
-  uses: Steady-Hand-AI/Steady-Hand-Metrifid@0.9.0
+  uses: Steady-Hand-AI/Steady-Hand-Metrifid@0.9.1
   with:
     baseline_mjcf: old/robot.xml
     candidate_mjcf: new/robot.xml

@@ -704,8 +704,9 @@ jobs:
           test -n "$default_branch"
           PUBLIC_MAIN_HEAD="$(gh api "repos/${GH_REPO}/commits/${default_branch}" --jq '.sha')"
           REMOTE_TREE="$(gh api "repos/${GH_REPO}/commits/${EXPECTED_COMMIT}" --jq '.commit.tree.sha')"
-          REMOTE_WORKFLOW_B64="$(gh api "repos/${GH_REPO}/contents/.github/workflows/publish.yml?ref=${EXPECTED_COMMIT}" --jq '.content')"
-          REMOTE_WORKFLOW_ENCODING="$(gh api "repos/${GH_REPO}/contents/.github/workflows/publish.yml?ref=${EXPECTED_COMMIT}" --jq '.encoding')"
+          REMOTE_WORKFLOW_FILE="$(mktemp "${RUNNER_TEMP}/metrifid-workflow.XXXXXX")"
+          trap 'rm -f -- "$REMOTE_WORKFLOW_FILE"' EXIT
+          gh api "repos/${GH_REPO}/contents/.github/workflows/publish.yml?ref=${EXPECTED_COMMIT}" > "$REMOTE_WORKFLOW_FILE"
           TAG_OBJECT_TYPE="$(gh api "repos/${GH_REPO}/git/ref/tags/${PLANNED_TAG}" --jq '.object.type')"
           TAG_OBJECT_SHA="$(gh api "repos/${GH_REPO}/git/ref/tags/${PLANNED_TAG}" --jq '.object.sha')"
           if [ "$TAG_OBJECT_TYPE" = "tag" ]; then
@@ -715,7 +716,7 @@ jobs:
             TAG_PEELED=""
             TAG_PEELED_TYPE=""
           fi
-          export PUBLIC_MAIN_HEAD REMOTE_TREE REMOTE_WORKFLOW_B64 REMOTE_WORKFLOW_ENCODING
+          export PUBLIC_MAIN_HEAD REMOTE_TREE REMOTE_WORKFLOW_FILE
           export TAG_OBJECT_TYPE TAG_PEELED TAG_PEELED_TYPE
           python - <<'PY'
           import base64
@@ -758,14 +759,23 @@ jobs:
               raise SystemExit(
                   f"manifest tree {manifest.get('tree')!r} is not the public tree {remote_tree!r}"
               )
-          if os.environ["REMOTE_WORKFLOW_ENCODING"] != "base64":
-              raise SystemExit(
-                  "the public workflow content is not base64: "
-                  f"{os.environ['REMOTE_WORKFLOW_ENCODING']!r}"
+          try:
+              response = json.loads(
+                  pathlib.Path(os.environ["REMOTE_WORKFLOW_FILE"]).read_text(encoding="utf-8")
               )
+          except (OSError, UnicodeError, json.JSONDecodeError) as error:
+              raise SystemExit(f"the public workflow response is unreadable JSON: {error}") from error
+          if not isinstance(response, dict):
+              raise SystemExit("the public workflow response is not an object")
+          encoding = response.get("encoding")
+          content = response.get("content")
+          if not isinstance(encoding, str) or not isinstance(content, str):
+              raise SystemExit("the public workflow encoding and content must be strings")
+          if encoding != "base64":
+              raise SystemExit(f"the public workflow content is not base64: {encoding!r}")
           # GitHub documents line separators inside its Base64 content. Only those are removed,
           # and decoding is strict, so trailing garbage or bad padding cannot slip through.
-          encoded = os.environ["REMOTE_WORKFLOW_B64"].replace("\n", "")
+          encoded = content.replace("\n", "")
           if not encoded:
               raise SystemExit("the public workflow content is empty")
           try:
@@ -1177,8 +1187,9 @@ jobs:
           test -n "$default_branch"
           PUBLIC_MAIN_HEAD="$(gh api "repos/${GH_REPO}/commits/${default_branch}" --jq '.sha')"
           REMOTE_TREE="$(gh api "repos/${GH_REPO}/commits/${EXPECTED_COMMIT}" --jq '.commit.tree.sha')"
-          REMOTE_WORKFLOW_B64="$(gh api "repos/${GH_REPO}/contents/.github/workflows/publish.yml?ref=${EXPECTED_COMMIT}" --jq '.content')"
-          REMOTE_WORKFLOW_ENCODING="$(gh api "repos/${GH_REPO}/contents/.github/workflows/publish.yml?ref=${EXPECTED_COMMIT}" --jq '.encoding')"
+          REMOTE_WORKFLOW_FILE="$(mktemp "${RUNNER_TEMP}/metrifid-workflow.XXXXXX")"
+          trap 'rm -f -- "$REMOTE_WORKFLOW_FILE"' EXIT
+          gh api "repos/${GH_REPO}/contents/.github/workflows/publish.yml?ref=${EXPECTED_COMMIT}" > "$REMOTE_WORKFLOW_FILE"
           TAG_OBJECT_TYPE="$(gh api "repos/${GH_REPO}/git/ref/tags/${PLANNED_TAG}" --jq '.object.type')"
           TAG_OBJECT_SHA="$(gh api "repos/${GH_REPO}/git/ref/tags/${PLANNED_TAG}" --jq '.object.sha')"
           if [ "$TAG_OBJECT_TYPE" = "tag" ]; then
@@ -1188,7 +1199,7 @@ jobs:
             TAG_PEELED=""
             TAG_PEELED_TYPE=""
           fi
-          export PUBLIC_MAIN_HEAD REMOTE_TREE REMOTE_WORKFLOW_B64 REMOTE_WORKFLOW_ENCODING
+          export PUBLIC_MAIN_HEAD REMOTE_TREE REMOTE_WORKFLOW_FILE
           export TAG_OBJECT_TYPE TAG_PEELED TAG_PEELED_TYPE
           python - <<'PY'
           import base64
@@ -1227,14 +1238,23 @@ jobs:
               raise SystemExit(
                   f"manifest tree {manifest.get('tree')!r} is not the public tree {remote_tree!r}"
               )
-          if os.environ["REMOTE_WORKFLOW_ENCODING"] != "base64":
-              raise SystemExit(
-                  "the public workflow content is not base64: "
-                  f"{os.environ['REMOTE_WORKFLOW_ENCODING']!r}"
+          try:
+              response = json.loads(
+                  pathlib.Path(os.environ["REMOTE_WORKFLOW_FILE"]).read_text(encoding="utf-8")
               )
+          except (OSError, UnicodeError, json.JSONDecodeError) as error:
+              raise SystemExit(f"the public workflow response is unreadable JSON: {error}") from error
+          if not isinstance(response, dict):
+              raise SystemExit("the public workflow response is not an object")
+          encoding = response.get("encoding")
+          content = response.get("content")
+          if not isinstance(encoding, str) or not isinstance(content, str):
+              raise SystemExit("the public workflow encoding and content must be strings")
+          if encoding != "base64":
+              raise SystemExit(f"the public workflow content is not base64: {encoding!r}")
           # GitHub documents line separators inside its Base64 content. Only those are removed,
           # and decoding is strict, so trailing garbage or bad padding cannot slip through.
-          encoded = os.environ["REMOTE_WORKFLOW_B64"].replace("\n", "")
+          encoded = content.replace("\n", "")
           if not encoded:
               raise SystemExit("the public workflow content is empty")
           try:
@@ -1575,8 +1595,9 @@ jobs:
           test -n "$default_branch"
           PUBLIC_MAIN_HEAD="$(gh api "repos/${GH_REPO}/commits/${default_branch}" --jq '.sha')"
           REMOTE_TREE="$(gh api "repos/${GH_REPO}/commits/${EXPECTED_COMMIT}" --jq '.commit.tree.sha')"
-          REMOTE_WORKFLOW_B64="$(gh api "repos/${GH_REPO}/contents/.github/workflows/publish.yml?ref=${EXPECTED_COMMIT}" --jq '.content')"
-          REMOTE_WORKFLOW_ENCODING="$(gh api "repos/${GH_REPO}/contents/.github/workflows/publish.yml?ref=${EXPECTED_COMMIT}" --jq '.encoding')"
+          REMOTE_WORKFLOW_FILE="$(mktemp "${RUNNER_TEMP}/metrifid-workflow.XXXXXX")"
+          trap 'rm -f -- "$REMOTE_WORKFLOW_FILE"' EXIT
+          gh api "repos/${GH_REPO}/contents/.github/workflows/publish.yml?ref=${EXPECTED_COMMIT}" > "$REMOTE_WORKFLOW_FILE"
           TAG_OBJECT_TYPE="$(gh api "repos/${GH_REPO}/git/ref/tags/${PLANNED_TAG}" --jq '.object.type')"
           TAG_OBJECT_SHA="$(gh api "repos/${GH_REPO}/git/ref/tags/${PLANNED_TAG}" --jq '.object.sha')"
           if [ "$TAG_OBJECT_TYPE" = "tag" ]; then
@@ -1586,7 +1607,7 @@ jobs:
             TAG_PEELED=""
             TAG_PEELED_TYPE=""
           fi
-          export PUBLIC_MAIN_HEAD REMOTE_TREE REMOTE_WORKFLOW_B64 REMOTE_WORKFLOW_ENCODING
+          export PUBLIC_MAIN_HEAD REMOTE_TREE REMOTE_WORKFLOW_FILE
           export TAG_OBJECT_TYPE TAG_PEELED TAG_PEELED_TYPE
           python - <<'PY'
           import base64
@@ -1625,14 +1646,23 @@ jobs:
               raise SystemExit(
                   f"manifest tree {manifest.get('tree')!r} is not the public tree {remote_tree!r}"
               )
-          if os.environ["REMOTE_WORKFLOW_ENCODING"] != "base64":
-              raise SystemExit(
-                  "the public workflow content is not base64: "
-                  f"{os.environ['REMOTE_WORKFLOW_ENCODING']!r}"
+          try:
+              response = json.loads(
+                  pathlib.Path(os.environ["REMOTE_WORKFLOW_FILE"]).read_text(encoding="utf-8")
               )
+          except (OSError, UnicodeError, json.JSONDecodeError) as error:
+              raise SystemExit(f"the public workflow response is unreadable JSON: {error}") from error
+          if not isinstance(response, dict):
+              raise SystemExit("the public workflow response is not an object")
+          encoding = response.get("encoding")
+          content = response.get("content")
+          if not isinstance(encoding, str) or not isinstance(content, str):
+              raise SystemExit("the public workflow encoding and content must be strings")
+          if encoding != "base64":
+              raise SystemExit(f"the public workflow content is not base64: {encoding!r}")
           # GitHub documents line separators inside its Base64 content. Only those are removed,
           # and decoding is strict, so trailing garbage or bad padding cannot slip through.
-          encoded = os.environ["REMOTE_WORKFLOW_B64"].replace("\n", "")
+          encoded = content.replace("\n", "")
           if not encoded:
               raise SystemExit("the public workflow content is empty")
           try:
@@ -1849,8 +1879,9 @@ jobs:
           test -n "$default_branch"
           PUBLIC_MAIN_HEAD="$(gh api "repos/${GH_REPO}/commits/${default_branch}" --jq '.sha')"
           REMOTE_TREE="$(gh api "repos/${GH_REPO}/commits/${EXPECTED_COMMIT}" --jq '.commit.tree.sha')"
-          REMOTE_WORKFLOW_B64="$(gh api "repos/${GH_REPO}/contents/.github/workflows/publish.yml?ref=${EXPECTED_COMMIT}" --jq '.content')"
-          REMOTE_WORKFLOW_ENCODING="$(gh api "repos/${GH_REPO}/contents/.github/workflows/publish.yml?ref=${EXPECTED_COMMIT}" --jq '.encoding')"
+          REMOTE_WORKFLOW_FILE="$(mktemp "${RUNNER_TEMP}/metrifid-workflow.XXXXXX")"
+          trap 'rm -f -- "$REMOTE_WORKFLOW_FILE"' EXIT
+          gh api "repos/${GH_REPO}/contents/.github/workflows/publish.yml?ref=${EXPECTED_COMMIT}" > "$REMOTE_WORKFLOW_FILE"
           TAG_OBJECT_TYPE="$(gh api "repos/${GH_REPO}/git/ref/tags/${PLANNED_TAG}" --jq '.object.type')"
           TAG_OBJECT_SHA="$(gh api "repos/${GH_REPO}/git/ref/tags/${PLANNED_TAG}" --jq '.object.sha')"
           if [ "$TAG_OBJECT_TYPE" = "tag" ]; then
@@ -1860,7 +1891,7 @@ jobs:
             TAG_PEELED=""
             TAG_PEELED_TYPE=""
           fi
-          export PUBLIC_MAIN_HEAD REMOTE_TREE REMOTE_WORKFLOW_B64 REMOTE_WORKFLOW_ENCODING
+          export PUBLIC_MAIN_HEAD REMOTE_TREE REMOTE_WORKFLOW_FILE
           export TAG_OBJECT_TYPE TAG_PEELED TAG_PEELED_TYPE
           python - <<'PY'
           import base64
@@ -1899,14 +1930,23 @@ jobs:
               raise SystemExit(
                   f"manifest tree {manifest.get('tree')!r} is not the public tree {remote_tree!r}"
               )
-          if os.environ["REMOTE_WORKFLOW_ENCODING"] != "base64":
-              raise SystemExit(
-                  "the public workflow content is not base64: "
-                  f"{os.environ['REMOTE_WORKFLOW_ENCODING']!r}"
+          try:
+              response = json.loads(
+                  pathlib.Path(os.environ["REMOTE_WORKFLOW_FILE"]).read_text(encoding="utf-8")
               )
+          except (OSError, UnicodeError, json.JSONDecodeError) as error:
+              raise SystemExit(f"the public workflow response is unreadable JSON: {error}") from error
+          if not isinstance(response, dict):
+              raise SystemExit("the public workflow response is not an object")
+          encoding = response.get("encoding")
+          content = response.get("content")
+          if not isinstance(encoding, str) or not isinstance(content, str):
+              raise SystemExit("the public workflow encoding and content must be strings")
+          if encoding != "base64":
+              raise SystemExit(f"the public workflow content is not base64: {encoding!r}")
           # GitHub documents line separators inside its Base64 content. Only those are removed,
           # and decoding is strict, so trailing garbage or bad padding cannot slip through.
-          encoded = os.environ["REMOTE_WORKFLOW_B64"].replace("\n", "")
+          encoded = content.replace("\n", "")
           if not encoded:
               raise SystemExit("the public workflow content is empty")
           try:
