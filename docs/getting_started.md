@@ -25,7 +25,7 @@ python -c "import metrifid; print(metrifid.__version__)"
 
 ---
 
-Metrifid 0.9.0 adds [planar controller repair](repair.md): a bounded search from an explicit
+Metrifid 0.9.1 adds [planar controller repair](repair.md): a bounded search from an explicit
 starting controller, saved results and independent replay. Qualification is simulation only.
 
 ## Choose your starting point
@@ -82,7 +82,7 @@ Repair and replay require Linux x86_64, CPython 3.13, MuJoCo 3.16.0 or 3.17.0 an
 ```bash
 python3.13 -m venv .venv-repair
 . .venv-repair/bin/activate
-python -m pip install 'metrifid==0.9.0' 'mujoco==3.17.0' 'numpy==2.5.4'
+python -m pip install 'metrifid==0.9.1' 'mujoco==3.17.0' 'numpy==2.5.4'
 metrifid repair --help
 ```
 

@@ -1,6 +1,6 @@
 # Planar controller repair
 
-Available in Metrifid **0.9.0** through the `metrifid repair` commands and `metrifid.repair` SDK.
+Available in Metrifid **0.9.1** through the `metrifid repair` commands and `metrifid.repair` SDK.
 
 Metrifid adjusts an explicit starting controller for one fixed planar pushing family, retains the
 measured result, and independently replays a selected controller. Every qualification is
@@ -16,7 +16,7 @@ Prepare an isolated environment yourself and install the supported package versi
 ```bash
 python3.13 -m venv .venv-repair
 . .venv-repair/bin/activate
-python -m pip install 'metrifid==0.9.0' 'mujoco==3.17.0' 'numpy==2.5.4'
+python -m pip install 'metrifid==0.9.1' 'mujoco==3.17.0' 'numpy==2.5.4'
 metrifid repair --help
 ```
 
@@ -75,7 +75,7 @@ The source distribution also includes an installed-command check using the uncha
 example. From an extracted source distribution or checkout, with the environment above active:
 
 ```bash
-python examples/repair/installed_smoke.py --output repair-smoke --expected-version 0.9.0
+python examples/repair/installed_smoke.py --output repair-smoke --expected-version 0.9.1
 ```
 
 The output parent must not exist. The check invokes the installed console script for one repair
