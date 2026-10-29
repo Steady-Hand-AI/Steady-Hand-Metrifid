@@ -446,6 +446,45 @@ jobs:
           python tools/mjb_characterization.py > lane-evidence/mjb.log
           cat lane-evidence/mjb.log
 
+      - name: Installed repair journey on the supported runtime
+        if: matrix.id == 'linux_x64_py313'
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          import pathlib
+          import subprocess
+          import sys
+
+          manifest = json.loads(pathlib.Path("release-artifacts/original_manifest.json").read_text())
+          wheel = pathlib.Path("release-artifacts/dist") / manifest["wheel"]["filename"]
+          if hashlib.sha256(wheel.read_bytes()).hexdigest() != manifest["wheel"]["sha256"]:
+              raise SystemExit("repair wheel does not match the original manifest")
+          wheel = wheel.resolve()
+          version = wheel.name.removeprefix("metrifid-").removesuffix("-py3-none-any.whl")
+          script = pathlib.Path("examples/repair/installed_smoke.py").resolve()
+          scratch = pathlib.Path(os.environ["RUNNER_TEMP"]) / "metrifid-repair"
+          scratch.mkdir()
+          venv = scratch / "venv"
+          python = venv / "bin/python"
+          environment = dict(os.environ)
+          environment.pop("PYTHONPATH", None)
+          environment["PATH"] = str(venv / "bin") + os.pathsep + environment["PATH"]
+          subprocess.run([sys.executable, "-m", "venv", str(venv)], env=environment, check=True)
+          subprocess.run(
+              [str(python), "-m", "pip", "install", str(wheel), "mujoco==3.16.0", "numpy==2.5.4"],
+              env=environment, check=True,
+          )
+          subprocess.run([str(python), "-m", "pip", "check"], env=environment, check=True)
+          subprocess.run(
+              [str(python), str(script), "--output", str(scratch / "journey"),
+               "--expected-version", version],
+              cwd=scratch, env=environment, check=True,
+          )
+          PY
+
       - name: Record blocking lane evidence
         run: |
           cp release-artifacts/original_manifest.json lane-evidence/original_manifest.json

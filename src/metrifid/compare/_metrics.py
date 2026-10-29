@@ -1,6 +1,5 @@
 """comparison hinge/slide metric evaluation, repeatability qualification, and reason production."""
 
-# Keep the baseline import statement order for rename-normalized AST identity.
 from __future__ import annotations  # noqa: I001
 
 from dataclasses import dataclass

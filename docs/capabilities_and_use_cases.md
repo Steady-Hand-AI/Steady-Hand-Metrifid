@@ -17,8 +17,8 @@ This is not marketing copy and does not claim more than the current implementati
 
 ## The accepted command surface
 
-Metrifid is a local MuJoCo assurance library and command-line tool. The accepted command surface is
-exactly these seven expert commands:
+Metrifid is a local MuJoCo assurance library and command-line tool. Its core model and runtime
+assurance surface has seven expert commands:
 
 | Command | The question it answers |
 | --- | --- |
@@ -30,13 +30,37 @@ exactly these seven expert commands:
 | `review-runtime` | May one exact native MuJoCo profile replace another, given twelve retained evidence cells? |
 | `run-runtime-review` | Create those twelve native evidence cells through two prepared profiles and decide immediately. |
 
-Two routes reach the `review-model` decision without a policy file and add no decision of their
-own: `metrifid diff` compares two model versions directly and retains the evidence, and
-`metrifid show` reads a retained receipt without compiling anything.
+Two convenience routes add no new decision: `metrifid diff` runs `review-model` with an empty
+policy and retains the evidence; `metrifid show` reads a certification or model-release receipt
+without compiling anything.
+
+The separate planar controller workflow has three routes: `metrifid repair run`,
+`metrifid repair show` and `metrifid repair replay`. These adjust and evaluate a controller in the
+fixed `planar_push_timed15_v1` family. Repair records use `repair show`, not generic `show`.
+
+### Bounded planar controller repair
+
+A request supplies three editable task fields — lower finger rail, target position and target yaw —
+and 15 normalized starting controller parameters. `repair run` uses bounded coordinate polling,
+then separately confirms a qualifying controller at both timesteps. It changes controller
+parameters, not arbitrary MJCF models. Qualification uses the fixed final-hold position, yaw and
+speed criteria together with the whole-episode physical gates.
+
+`repair show` reads the saved result without MuJoCo or NumPy. `repair replay` performs a fresh
+paired evaluation of the selected controller from its retained bundle, without optimization.
+Repair and replay execute only on Linux x86_64 with CPython 3.13, MuJoCo 3.16.0 and NumPy 2.5.4.
+Those exact requirements do not narrow the core package's dependency markers.
+
+Requests configure finite attempt, integration-step and process-CPU limits. A run can return a
+confirmed controller, finite nonqualification, incomplete evidence, refusal or operational error;
+an unsuccessful finite search does not prove the task impossible. All qualification is simulation
+only, with no global-optimum, broad robustness or hardware-safety guarantee. The
+[repair guide](repair.md) provides the public starter request, exact budgets and schemas, and the
+run → show → moved-bundle replay workflow.
 
 ## What each command decides
 
-These are separate decisions, and none of them substitutes for another:
+Each route has a distinct purpose; a saved-result read performs no new evaluation:
 
 ```text
 certify             exact compiled-artifact identity
@@ -46,11 +70,15 @@ qualify-workload    workload detection power against supplied probes
 audit-timestep      workload-bounded timestep qualification
 review-runtime      native-profile replacement over retained evidence
 run-runtime-review  native evidence creation plus the same replacement decision
+repair run          bounded planar controller search and paired confirmation
+repair show         saved repair-result reading without simulation
+repair replay       fresh paired evaluation of a retained planar controller
 ```
 
 Metrifid does not treat source-code similarity, successful compilation, visual inspection, or one
-arbitrary simulation run as sufficient proof. It binds each result to exact source bytes, runtime
-identity, declared workload inputs, deterministic outputs, and machine-readable receipts.
+arbitrary simulation run as sufficient proof. Each decision states its measured subjects, inputs,
+runtime and claim boundary in retained machine-readable evidence. Repair qualifies the declared
+planar task only; core comparison receipts have their own source and workload contracts.
 
 The strongest current product idea is:
 
@@ -58,7 +86,8 @@ The strongest current product idea is:
 > `review-model` to see exactly which compiled fields moved, then `compare` when you need to know
 > whether the difference matters on the workload you care about. If the runtime changed, use
 > `run-runtime-review`. Use `audit-timestep` when the question is how far the timestep can be
-> increased within your declared fidelity limits.
+> increased within your declared fidelity limits. For a supported planar controller that misses
+> its target, use `repair run` and inspect its confirmation and independent replay.
 
 A completed exit 20, 30, or 40 is a referee decision, not a process failure.
 
@@ -854,9 +883,7 @@ This work is important because a correct numerical result is not useful if the s
 
 ## Deterministic, canonical evidence
 
-Metrifid publishes canonical JSON.
-
-Rules include:
+Core decision receipts use the canonical exact-number JSON format. Its rules include:
 
 - object keys sorted by Unicode code-point order;
 - strict UTF-8;
@@ -884,9 +911,16 @@ The binary64 representation preserves:
 - positive and negative infinity;
 - NaN payload bits.
 
+Repair has a separate bounded decimal JSON format with exact binary64 round trips. Unavailable or
+nonfinite measurements become explicit `null` values with reasons; repair records bind declared
+artifact sizes and hashes and do not use a whole-document self-hash. See the
+[repair format reference](repair.md#saved-format-version-1).
+
 ## Self-hashing versus signing
 
-Receipts are self-consistent and self-hashed. The public validators check their internal structure, identities, decision facts, and hashes.
+Core self-hashed receipts carry internal consistency and identity checks. Their validators check
+structure, decision facts and hashes. Repair records have their own consistency and artifact-hash
+checks; neither format authenticates an author.
 
 They are **not cryptographically signed**.
 
@@ -896,9 +930,9 @@ Signed attestations, Sigstore, in-toto, and an enterprise evidence registry are 
 
 ## Installed distribution identity
 
-Decision-bearing commands require a normal installed Metrifid distribution.
+Core receipt-producing commands enforce a normal installed Metrifid distribution.
 
-The current product refuses:
+Their installed-identity check refuses:
 
 - editable installations for decision-bearing execution;
 - source-tree execution on `sys.path`;
@@ -906,7 +940,9 @@ The current product refuses:
 - more than one visible Metrifid distribution;
 - loaded package members that do not match the installed manifest.
 
-Each receipt records the Metrifid distribution version and digest of the code that produced it.
+Those core receipts record the distribution version and code digest. Repair records instead carry
+the tool version, runtime observations and documented request/artifact identities; they contain no
+installed-code distribution digest and do not enforce this core installed-identity gate.
 
 This supports reproducibility, but it means contributors need a two-lane workflow:
 
@@ -1162,20 +1198,21 @@ Metrifid is not currently:
 - a dashboard;
 - a controller-training system;
 - a reinforcement-learning framework;
-- a model editor or automatic repair tool;
+- an arbitrary model editor or general controller-repair tool;
 - a visual-diff tool;
 - a hardware safety-certification system;
 - a physics truth oracle;
-- a task-success evaluator;
-- a closed-loop controller validator;
+- a general task-success evaluator outside the fixed planar pushing family;
+- an arbitrary closed-loop controller validator;
 - a cross-simulator parity tool;
 - a CPU-versus-GPU backend comparator;
-- a MuJoCo-version migration command;
+- an automatic MuJoCo environment installer or upgrader;
 - a signed evidence registry;
 - an enterprise approval system;
 - a substitute for engineering judgment.
 
-It makes narrow, reproducible decisions and records the boundaries of those decisions.
+It makes bounded decisions and records their claim boundaries. Planar repair evaluates one
+fixed task family; Runtime Review evaluates replacement only within its declared evidence envelope.
 
 ---
 
@@ -1183,7 +1220,7 @@ It makes narrow, reproducible decisions and records the boundaries of those deci
 
 ## Runtime and compatibility
 
-The current source declares:
+The core model-comparison support envelope is:
 
 ```text
 Python >=3.11, with no metadata upper bound
@@ -1194,10 +1231,19 @@ MuJoCo exact validated profiles 3.9.0, 3.10.0, 3.11.0, and 3.12.0
 NumPy >=1.26, with no runtime upper bound
 ```
 
-Every native command uses the same capability-based runtime gate. The gate requires Linux or macOS plus the POSIX descriptor-relative filesystem capabilities used by the security model; it does not reject a machine architecture through an allowlist. The Intel macOS package bound above is a dependency marker read by the installer, not a runtime check. Native Windows is unsupported, and WSL is the documented route.
+The five core model commands — `certify`, `review-model`, `compare`, `audit-timestep` and
+`qualify-workload` — share a capability-based runtime gate. `diff` reaches that same gate through
+model review. It requires Linux or macOS and the necessary POSIX descriptor-relative filesystem
+capabilities, with no architecture allowlist. The Intel macOS package bound is a dependency marker,
+not a runtime check. Native Windows is unsupported; WSL is the documented route.
 
-Stable future releases are admitted only when their measured operation capabilities pass and are
-reported as capability-compatible, not validated. Package/native mismatch, missing call-graph
+`review-runtime` decides from retained evidence without starting a native worker;
+`run-runtime-review` separately measures and admits the two prepared external profiles it will run.
+Repair execution has its own exact Linux x86_64 / CPython 3.13 / MuJoCo 3.16.0 / NumPy 2.5.4 lane.
+Help, repair request admission and saved repair reading are native-free.
+
+For the core gate, stable future releases are admitted only when their measured operation
+capabilities pass and are reported as capability-compatible, not validated. Package/native mismatch, missing call-graph
 capabilities, uncharacterized `review-model` field surfaces, and unrepresentable actuator signatures
 fail closed with specific operational evidence. MJB digests are runtime-bound and are not expected
 to match across platforms or Python environments.
@@ -1208,15 +1254,21 @@ The present security design relies on POSIX descriptor-relative filesystem behav
 
 ## Installed-wheel requirement
 
-Decision-bearing execution expects a normal installed distribution. Editable/source-tree execution is deliberately refused for trusted receipts.
+Use a normal installed distribution for supported product execution and validation. Core receipt
+production enforces its installed-identity gate; repair has the separate version/runtime and
+artifact record contract described above.
 
 ## Metrics
 
-Behavior comparison is limited to monitored hinge and slide qpos/qvel metrics.
+`compare` is limited to monitored hinge and slide qpos/qvel metrics. Planar repair separately
+evaluates its fixed target-position, yaw and speed criteria and physical gates; it does not add
+arbitrary task or sensor metrics to `compare`.
 
 ## Open-loop execution
 
-Comparison uses a predeclared open-loop action sequence. It does not execute a feedback controller or policy.
+`compare` uses a predeclared open-loop action sequence. It does not execute a feedback controller
+or policy. Planar repair evaluates its fixed feedback controller; arbitrary controllers remain
+outside that family.
 
 ## No automatic aliases
 
@@ -1226,9 +1278,13 @@ Name or alignment incompatibilities are refused rather than silently guessed.
 
 A visual or naming-only serialized difference can cause `NOT_CERTIFIED_COMPILED_DIFFERS` even when a particular workload would show no physical difference.
 
-## Fixed resource budgets
+## Resource budgets
 
-The current product uses fixed limits rather than user-configurable resource policies.
+Core model/workload operations retain their documented fixed admission and evaluation limits.
+Repair requests separately configure `max_attempts`, `max_integration_steps` and `max_cpu_seconds`
+within their admitted bounds. The engine charges actual completed work, reserves confirmation
+capacity and distinguishes finite budget exhaustion from incomplete or unknown work. See the
+[repair limits and cost rules](repair.md#outcomes-costs-and-partial-output).
 
 ## Unsigned receipts
 
@@ -1238,7 +1294,7 @@ Self-hashed evidence is not signed provenance.
 
 # 10. Best current value proposition
 
-The most faithful current description is:
+The compiled-model and workload core can be described as:
 
 > **Metrifid is a local trust layer for MuJoCo model changes. It can certify exact compiled-model identity without a workload, compare declared behavior when artifacts differ, and qualify candidate timesteps against an explicit workload and tolerance policy.**
 
@@ -1266,12 +1322,13 @@ The first two sentences must always be read with the product's claim boundaries:
 | Candidate timestep increase | `audit-timestep` | measure real throughput separately |
 | CI gate for model maintenance | `certify` | require review or workload comparison on exit 40 |
 | Reproducible benchmark release | `certify` + `compare` | retain exact receipts and workload artifacts |
+| Supported planar controller misses its target | `repair run` | `repair show`, then independent `repair replay` |
 
 ---
 
 # 12. Final faithful assessment
 
-Metrifid already provides a coherent three-part technical product:
+The compiled-model and workload core provides three complementary decisions:
 
 ```text
 Certify
@@ -1284,6 +1341,10 @@ Audit timestep
   deterministic workload-bounded candidate qualification
 ```
 
+Model Review adds declared-policy classification, Workload Qualification measures detection of
+supplied probes, and Runtime Review evaluates a bounded native-profile replacement. Planar repair
+adds controller search and independent replay for one fixed simulation family.
+
 Its strongest qualities are:
 
 - exact source and compiled identities;
@@ -1292,7 +1353,7 @@ Its strongest qualities are:
 - deterministic repeats;
 - refusal instead of silent approximation;
 - first-divergence evidence;
-- canonical self-hashed receipts;
+- canonical self-hashed core receipts and separately defined repair records;
 - bounded resource behavior;
 - descriptor-confined source and output handling;
 - clear separation between artifact equality and behavior equality.
@@ -1302,9 +1363,10 @@ Its current limitations are equally important:
 - four retained exact MuJoCo profiles, with later stable releases only capability-admitted and
   `review-model` limited to cataloged public-field surfaces;
 - currently narrow measured platform evidence;
-- open-loop workload only;
-- hinge and slide qpos/qvel metrics only;
-- no cross-runtime or cross-backend product surface;
+- open-loop workloads and hinge/slide qpos/qvel metrics for `compare`;
+- one fixed planar family and exact execution lane for repair;
+- Runtime Review bounded to its declared profiles, workload, evidence and tolerances;
+- no cross-backend equivalence claim;
 - no cryptographic signing or team control plane.
 
 Within those limits, Metrifid is useful today as a local SDK on the tested runtime, an open-source alpha library, a model-release evidence tool, and a CI gate for MuJoCo assets.

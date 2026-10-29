@@ -1,9 +1,8 @@
-"""Frozen qualification statuses, exit codes, and claim limitations.
+"""Workload-qualification statuses, exit codes, and claim limitations.
 
-The four completed statuses answer one question: do the selected workloads detect every declared
-perturbation at or above its required magnitude. They are deliberately distinct from the comparison
-statuses they are built from, and from the research statuses that preceded this product, which are
-not published anywhere in this package.
+The four completed statuses describe whether the selected workloads detect every
+declared perturbation at or above its required magnitude. Qualification statuses
+are distinct from the comparison outcomes used to derive them.
 """
 
 from __future__ import annotations

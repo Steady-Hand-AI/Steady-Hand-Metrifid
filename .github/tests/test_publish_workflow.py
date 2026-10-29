@@ -18,11 +18,13 @@ from __future__ import annotations
 
 import ast
 import hashlib
+import io
 import json
 import os
 import re
 import subprocess
 import sys
+import tarfile
 import zipfile
 from pathlib import Path
 from typing import Any
@@ -2966,3 +2968,194 @@ def test_moving_the_registry_journey_output_back_inside_the_model_root_fails(
     completed, _ = _run_journey(jobs[job_id], JOURNEY_STEPS[job_id], workdir, source=reverted)
     assert completed.returncode != 0
     assert "output_inside_model_root" in completed.stderr, completed.stderr
+
+
+# ---- The same installed repair example follows each registry's core journey -------------------
+
+REPAIR_STEP = "Run installed repair from the verified registry artifacts"
+REPAIR_SETUP_STEP = "Set up the supported repair interpreter"
+REPAIR_VERSION = "0.7.2"
+REPAIR_MEMBERS = {
+    "installed_smoke.py": b"# controlled public example fixture\n",
+    "planar_push.json": b'{"controlled":true}\n',
+}
+
+
+@pytest.mark.parametrize("job_id", REGISTRY_VERIFY_JOBS)
+def test_registry_repair_preserves_core_python_and_precedes_promotion(jobs, job_id):
+    """Repair adds its own pinned runtime after the existing 3.12 user journey."""
+    job = jobs[job_id]
+    setups = [step for step in _steps(job) if "actions/setup-python@" in step.get("uses", "")]
+    assert [step["with"]["python-version"] for step in setups] == ["3.12", "3.13"]
+    assert _step_index(job, JOURNEY_STEPS[job_id]) < _step_index(job, REPAIR_SETUP_STEP)
+    assert _step_index(job, REPAIR_SETUP_STEP) < _step_index(job, REPAIR_STEP)
+    repair = _step_named(job, REPAIR_STEP)
+    assert "if" not in repair
+    assert "continue-on-error" not in repair
+    assert all("checkout@" not in step.get("uses", "") for step in _steps(job))
+    assert "extractall" not in repair["run"]
+    successor = "pypi_publish" if job_id == "testpypi_verify" else "github_release"
+    assert _needs(jobs[successor]) == {job_id}
+
+
+def _repair_artifacts(workdir: Path, fault: str = "") -> dict[str, Path]:
+    """Create verified registry bytes with one narrowly controlled archive defect."""
+    downloaded = workdir / "downloaded"
+    downloaded.mkdir()
+    wheel = downloaded / f"metrifid-{REPAIR_VERSION}-py3-none-any.whl"
+    wheel.write_bytes(b"controlled original wheel")
+    sdist = downloaded / f"metrifid-{REPAIR_VERSION}.tar.gz"
+    prefix = f"metrifid-{REPAIR_VERSION}/examples/repair/"
+    with tarfile.open(sdist, "w:gz") as archive:
+        for name, content in REPAIR_MEMBERS.items():
+            if fault == "missing" and name == "installed_smoke.py":
+                continue
+            member = tarfile.TarInfo(prefix + name)
+            if name == "installed_smoke.py":
+                if fault == "wrong_version":
+                    member.name = "metrifid-9.9.9/examples/repair/" + name
+                elif fault in ("symlink", "hardlink"):
+                    member.type = tarfile.SYMTYPE if fault == "symlink" else tarfile.LNKTYPE
+                    member.linkname = "../other.py"
+                elif fault == "oversize":
+                    content = b"x" * 65537
+            member.size = len(content) if member.isfile() else 0
+            archive.addfile(member, io.BytesIO(content) if member.isfile() else None)
+            if fault == "duplicate" and name == "installed_smoke.py":
+                archive.addfile(member, io.BytesIO(content))
+        unrelated = tarfile.TarInfo("unrelated/do-not-extract.txt")
+        unrelated.size = 3
+        archive.addfile(unrelated, io.BytesIO(b"out"))
+    stored = workdir / "release-artifacts"
+    stored.mkdir()
+    rows = [
+        {"filename": p.name, "sha256": hashlib.sha256(p.read_bytes()).hexdigest()}
+        for p in (wheel, sdist)
+    ]
+    (stored / "dist-promotion-manifest.json").write_text(json.dumps({"artifacts": rows}))
+    if fault == "wheel_digest":
+        wheel.write_bytes(b"substituted wheel")
+    if fault == "sdist_digest":
+        sdist.write_bytes(b"substituted sdist")
+    return {"wheel": wheel, "sdist": sdist}
+
+
+REPAIR_SUBPROCESS_FAKE = r"""
+import json as _json
+import pathlib as _pathlib
+import subprocess as _subprocess
+
+
+def _controlled_run(argv, **kwargs):
+    argv = list(map(str, argv))
+    environment = kwargs.get("env", {})
+    row = {"argv": argv, "check": kwargs.get("check", False),
+           "cwd": str(kwargs.get("cwd", "")), "path": environment.get("PATH"),
+           "pythonpath": environment.get("PYTHONPATH")}
+    with _pathlib.Path(os.environ["REPAIR_CALLS"]).open("a") as handle:
+        handle.write(_json.dumps(row) + "\n")
+    stage = ("venv" if argv[1:3] == ["-m", "venv"] else
+             "install" if argv[1:4] == ["-m", "pip", "install"] else
+             "pip_check" if argv[1:4] == ["-m", "pip", "check"] else "smoke")
+    code = 37 if stage == os.environ.get("REPAIR_FAIL") else 0
+    if code and kwargs.get("check"):
+        raise _subprocess.CalledProcessError(code, argv)
+    return _subprocess.CompletedProcess(argv, code)
+
+
+_subprocess.run = _controlled_run
+"""
+
+
+def _registry_repair(jobs, job_id, workdir, *, fault="", failure=""):
+    """Execute the real inline admission/commands with only subprocess work controlled."""
+    paths = _repair_artifacts(workdir, fault)
+    log = workdir / "calls.jsonl"
+    done = _run_validator(
+        _inline_python(jobs[job_id], REPAIR_STEP),
+        workdir,
+        {
+            "RELEASE_VERSION": REPAIR_VERSION,
+            "REPAIR_STAGE": str(workdir / "repair"),
+            "REPAIR_CALLS": str(log),
+            "REPAIR_FAIL": failure,
+            "PYTHONPATH": "must-be-cleared",
+        },
+        prelude=REPAIR_SUBPROCESS_FAKE,
+    )
+    calls = [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
+    return done, calls, paths
+
+
+@pytest.mark.parametrize("job_id", REGISTRY_VERIFY_JOBS)
+def test_registry_repair_executes_the_shared_example_with_exact_installed_wheel(
+    jobs, job_id, tmp_path
+):
+    """The step installs bound bytes and invokes the copied example outside its source tree."""
+    done, calls, paths = _registry_repair(jobs, job_id, tmp_path)
+    assert done.returncode == 0, done.stderr
+    assert len(calls) == 4
+    scratch = tmp_path / "repair"
+    python = str(scratch / "venv/bin/python")
+    assert calls[0]["argv"][1:] == ["-m", "venv", str(scratch / "venv")]
+    assert calls[1]["argv"] == [
+        python,
+        "-m",
+        "pip",
+        "install",
+        str(paths["wheel"]),
+        "mujoco==3.16.0",
+        "numpy==2.5.4",
+    ]
+    assert calls[2]["argv"] == [python, "-m", "pip", "check"]
+    assert calls[3]["argv"] == [
+        python,
+        str(scratch / "public/installed_smoke.py"),
+        "--output",
+        str(scratch / "journey"),
+        "--expected-version",
+        REPAIR_VERSION,
+    ]
+    assert calls[3]["cwd"] == str(scratch)
+    assert all(call["check"] and call["pythonpath"] is None for call in calls)
+    assert all(call["path"].split(os.pathsep)[0] == str(scratch / "venv/bin") for call in calls)
+    assert {p.name: p.read_bytes() for p in (scratch / "public").iterdir()} == REPAIR_MEMBERS
+    assert not (scratch / "journey").exists()
+    assert not (tmp_path / "unrelated").exists()
+
+
+@pytest.mark.parametrize("job_id", REGISTRY_VERIFY_JOBS)
+@pytest.mark.parametrize(
+    ("failure", "called"), [("venv", 1), ("install", 2), ("pip_check", 3), ("smoke", 4)]
+)
+def test_registry_repair_failure_is_fatal_before_promotion(jobs, job_id, tmp_path, failure, called):
+    """Any actual failed command stops the existing verification job and its successor."""
+    done, calls, _ = _registry_repair(jobs, job_id, tmp_path, failure=failure)
+    assert done.returncode != 0
+    assert "CalledProcessError" in done.stderr
+    assert len(calls) == called
+
+
+@pytest.mark.parametrize("job_id", REGISTRY_VERIFY_JOBS)
+@pytest.mark.parametrize(
+    "fault",
+    [
+        "missing",
+        "duplicate",
+        "symlink",
+        "hardlink",
+        "oversize",
+        "wrong_version",
+        "wheel_digest",
+        "sdist_digest",
+    ],
+)
+def test_registry_repair_refuses_unbound_or_invalid_members_before_any_command(
+    jobs, job_id, tmp_path, fault
+):
+    """Neither a new lookup nor broad extraction can replace the two bounded original members."""
+    done, calls, _ = _registry_repair(jobs, job_id, tmp_path, fault=fault)
+    assert done.returncode != 0
+    assert calls == []
+    assert not (tmp_path / "repair/public/installed_smoke.py").exists()
+    assert not (tmp_path / "repair/public/planar_push.json").exists()

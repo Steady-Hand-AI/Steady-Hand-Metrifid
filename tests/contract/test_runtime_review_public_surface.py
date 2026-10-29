@@ -58,6 +58,7 @@ EXPECTED_CLI_COMMANDS = frozenset(
         "compare",
         "diff",
         "qualify-workload",
+        "repair",
         "review-model",
         "review-runtime",
         "run-runtime-review",
@@ -119,11 +120,12 @@ def test_runtime_review_preserves_the_top_level_public_api() -> None:
 
 
 def test_cli_exposes_both_bounded_runtime_review_paths() -> None:
-    """Retain existing commands and expose only the two bounded Runtime Review paths."""
+    """Retain the full CLI surface and both bounded Runtime Review paths."""
+    # Repair has its own result and failure contract, dispatched before this registry.
     check.equal(
         frozenset(cli._OPERATIONS),
-        EXPECTED_CLI_COMMANDS,
-        "the CLI dispatch table changed",
+        EXPECTED_CLI_COMMANDS - {"repair"},
+        "the operational-failure dispatch table changed",
     )
     check.equal(
         _parser_commands(),

@@ -1006,6 +1006,81 @@ jobs:
           print(f"certify journey published {len(published)} receipt files")
           PY
 
+      - name: Set up the supported repair interpreter
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.13"
+
+      - name: Run installed repair from the verified registry artifacts
+        env:
+          REPAIR_STAGE: ${{ runner.temp }}/metrifid-testpypi-repair
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          import pathlib
+          import subprocess
+          import sys
+          import tarfile
+
+          version = os.environ["RELEASE_VERSION"]
+          manifest = json.loads(pathlib.Path("release-artifacts/dist-promotion-manifest.json").read_text())
+          expected = {row["filename"]: row["sha256"] for row in manifest["artifacts"]}
+          wheel = pathlib.Path("downloaded") / f"metrifid-{version}-py3-none-any.whl"
+          sdist = pathlib.Path("downloaded") / f"metrifid-{version}.tar.gz"
+          for artifact in (wheel, sdist):
+              if hashlib.sha256(artifact.read_bytes()).hexdigest() != expected[artifact.name]:
+                  raise SystemExit(f"repair artifact differs from the verified original: {artifact.name}")
+          wheel = wheel.resolve()
+          scratch = pathlib.Path(os.environ["REPAIR_STAGE"])
+          scratch.mkdir()
+          public = scratch / "public"
+          public.mkdir()
+          wanted = {
+              f"metrifid-{version}/examples/repair/installed_smoke.py": ("installed_smoke.py", 65536),
+              f"metrifid-{version}/examples/repair/planar_push.json": ("planar_push.json", 16384),
+          }
+          contents = {}
+          with tarfile.open(sdist, "r:gz") as archive:
+              for member in archive:
+                  if member.name not in wanted:
+                      continue
+                  name, limit = wanted[member.name]
+                  if member.name in contents or not member.isfile() or not 0 < member.size <= limit:
+                      raise SystemExit(f"invalid or duplicate repair sdist member: {member.name}")
+                  stream = archive.extractfile(member)
+                  if stream is None:
+                      raise SystemExit(f"unreadable repair sdist member: {member.name}")
+                  with stream:
+                      blob = stream.read(limit + 1)
+                  if len(blob) != member.size:
+                      raise SystemExit(f"repair sdist member size mismatch: {member.name}")
+                  contents[member.name] = blob
+          if set(contents) != set(wanted):
+              raise SystemExit("sdist must contain exactly the two expected repair example members")
+          for member_name, blob in contents.items():
+              with (public / wanted[member_name][0]).open("xb") as output:
+                  output.write(blob)
+          venv = scratch / "venv"
+          python = venv / "bin/python"
+          environment = dict(os.environ)
+          environment.pop("PYTHONPATH", None)
+          environment["PATH"] = str(venv / "bin") + os.pathsep + environment["PATH"]
+          subprocess.run([sys.executable, "-m", "venv", str(venv)], env=environment, check=True)
+          subprocess.run(
+              [str(python), "-m", "pip", "install", str(wheel), "mujoco==3.16.0", "numpy==2.5.4"],
+              env=environment, check=True,
+          )
+          subprocess.run([str(python), "-m", "pip", "check"], env=environment, check=True)
+          subprocess.run(
+              [str(python), str(public / "installed_smoke.py"), "--output", str(scratch / "journey"),
+               "--expected-version", version],
+              cwd=scratch, env=environment, check=True,
+          )
+          PY
+
   pypi_publish:
     name: publish to PyPI
     needs: testpypi_verify
@@ -1391,6 +1466,81 @@ jobs:
           if not published:
               raise SystemExit("certify journey published no receipt")
           print(f"certify journey published {len(published)} receipt files")
+          PY
+
+      - name: Set up the supported repair interpreter
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.13"
+
+      - name: Run installed repair from the verified registry artifacts
+        env:
+          REPAIR_STAGE: ${{ runner.temp }}/metrifid-pypi-repair
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          import pathlib
+          import subprocess
+          import sys
+          import tarfile
+
+          version = os.environ["RELEASE_VERSION"]
+          manifest = json.loads(pathlib.Path("release-artifacts/dist-promotion-manifest.json").read_text())
+          expected = {row["filename"]: row["sha256"] for row in manifest["artifacts"]}
+          wheel = pathlib.Path("downloaded") / f"metrifid-{version}-py3-none-any.whl"
+          sdist = pathlib.Path("downloaded") / f"metrifid-{version}.tar.gz"
+          for artifact in (wheel, sdist):
+              if hashlib.sha256(artifact.read_bytes()).hexdigest() != expected[artifact.name]:
+                  raise SystemExit(f"repair artifact differs from the verified original: {artifact.name}")
+          wheel = wheel.resolve()
+          scratch = pathlib.Path(os.environ["REPAIR_STAGE"])
+          scratch.mkdir()
+          public = scratch / "public"
+          public.mkdir()
+          wanted = {
+              f"metrifid-{version}/examples/repair/installed_smoke.py": ("installed_smoke.py", 65536),
+              f"metrifid-{version}/examples/repair/planar_push.json": ("planar_push.json", 16384),
+          }
+          contents = {}
+          with tarfile.open(sdist, "r:gz") as archive:
+              for member in archive:
+                  if member.name not in wanted:
+                      continue
+                  name, limit = wanted[member.name]
+                  if member.name in contents or not member.isfile() or not 0 < member.size <= limit:
+                      raise SystemExit(f"invalid or duplicate repair sdist member: {member.name}")
+                  stream = archive.extractfile(member)
+                  if stream is None:
+                      raise SystemExit(f"unreadable repair sdist member: {member.name}")
+                  with stream:
+                      blob = stream.read(limit + 1)
+                  if len(blob) != member.size:
+                      raise SystemExit(f"repair sdist member size mismatch: {member.name}")
+                  contents[member.name] = blob
+          if set(contents) != set(wanted):
+              raise SystemExit("sdist must contain exactly the two expected repair example members")
+          for member_name, blob in contents.items():
+              with (public / wanted[member_name][0]).open("xb") as output:
+                  output.write(blob)
+          venv = scratch / "venv"
+          python = venv / "bin/python"
+          environment = dict(os.environ)
+          environment.pop("PYTHONPATH", None)
+          environment["PATH"] = str(venv / "bin") + os.pathsep + environment["PATH"]
+          subprocess.run([sys.executable, "-m", "venv", str(venv)], env=environment, check=True)
+          subprocess.run(
+              [str(python), "-m", "pip", "install", str(wheel), "mujoco==3.16.0", "numpy==2.5.4"],
+              env=environment, check=True,
+          )
+          subprocess.run([str(python), "-m", "pip", "check"], env=environment, check=True)
+          subprocess.run(
+              [str(python), str(public / "installed_smoke.py"), "--output", str(scratch / "journey"),
+               "--expected-version", version],
+              cwd=scratch, env=environment, check=True,
+          )
           PY
 
   github_release:

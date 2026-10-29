@@ -114,8 +114,6 @@ def _resolve_actuator_target_reference(
     return TargetReference(token, name)
 
 
-# The frozen helper rename is longer than its baseline spelling; retain the compact
-# expression layout so the unchanged function stays within the audited size bound.
 # fmt: off
 def _actuator_targets(
     model: mujoco.MjModel,

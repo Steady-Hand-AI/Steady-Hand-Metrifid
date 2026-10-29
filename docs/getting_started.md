@@ -25,6 +25,9 @@ python -c "import metrifid; print(metrifid.__version__)"
 
 ---
 
+Metrifid 0.9.0 adds [planar controller repair](repair.md): a bounded search from an explicit
+starting controller, saved results and independent replay. Qualification is simulation only.
+
 ## Choose your starting point
 
 You do not have to know which command you need. Start from the thing that actually changed, and
@@ -66,6 +69,27 @@ metrifid run-runtime-review runtime_review_run.json
 This creates the fixed twelve native evidence cells through two explicit, already-prepared Python
 profiles and returns the full-horizon Runtime Review decision. You prepare the two profiles yourself:
 Metrifid measures them, and does not discover, install, or repair MuJoCo environments.
+
+### A planar pushing controller misses its target
+
+Use `metrifid repair` for the fixed `planar_push_timed15_v1` family. Supply a lower finger rail,
+target position, target yaw and 15 normalized starting controller parameters. Bounded coordinate
+polling adjusts the parameters, then independently confirms a qualifying controller at both
+supported timesteps. It does not edit arbitrary MJCF models.
+
+Repair and replay require Linux x86_64, CPython 3.13, MuJoCo 3.16.0 and NumPy 2.5.4:
+
+```bash
+python3.13 -m venv .venv-repair
+. .venv-repair/bin/activate
+python -m pip install 'metrifid==0.9.0' 'mujoco==3.16.0' 'numpy==2.5.4'
+metrifid repair --help
+```
+
+Follow the [repair guide](repair.md) with the [public request](../examples/repair/planar_push.json)
+for run → show → moved-bundle replay, human and JSON output, and the exact request and record
+schemas. A finite unsuccessful search is not a proof of infeasibility; incomplete evidence is
+reported separately. Saved-result reading needs neither MuJoCo nor NumPy.
 
 ## Continue from the first result
 
@@ -124,7 +148,11 @@ metrifid review-runtime
 
 Two further routes, `metrifid diff` and `metrifid show`, are entry points to the same static
 model-release review rather than additional decisions. `diff` compares two model versions with no
-policy file, and `show` reads a receipt one of them retained.
+policy file, and `show` reads a certification or model-release receipt.
+
+The separate `metrifid repair run`, `repair show` and `repair replay` workflow adjusts and
+re-evaluates a controller within one fixed planar pushing family. See the [repair guide](repair.md)
+for its narrower execution support and simulation-only claims.
 
 A useful product description is:
 
@@ -171,7 +199,9 @@ Use this decision map:
 | “Would my workloads notice these probe models, and which probes stay invisible?” | `metrifid qualify-workload` | One baseline model, probe models you supply at declared magnitudes, three to sixteen workloads, and tolerances. The parameter, direction, magnitude and `magnitude_semantics` labels are preserved user declarations, not findings. |
 | “Can I create and decide one exact native-profile migration?” | `metrifid run-runtime-review` | Two explicit already-prepared Python profile launchers and one strict self-contained manifest. |
 | “I already retained the twelve native evidence cells; can I decide them?” | `metrifid review-runtime` | One strict retained-evidence Runtime Review configuration. |
-| “What did that saved result actually record?” | `metrifid show` | One retained receipt. No MuJoCo, no NumPy, no output directory |
+| “What did that saved model comparison record?” | `metrifid show` | One certification or model-release receipt. No MuJoCo, no NumPy, no output directory |
+| “Can this planar controller reach my target?” | `metrifid repair run` | A supported request with task fields, 15 starting parameters, finite limits, and a new output directory |
+| “What did repair record, and does its controller still qualify?” | `metrifid repair show` / `repair replay` | Read a saved repair record without native libraries, or freshly evaluate a retained run bundle on the supported runtime |
 
 A practical progression is:
 
@@ -227,7 +257,9 @@ The first users most likely to benefit are:
 
 ## 5. Requirements and supported environment
 
-The current source declares:
+The core model-comparison commands use the following support envelope. Repair execution has
+the narrower pinned runtime described above; help, request loading and saved repair reading
+remain native-free. The package dependency markers are unchanged:
 
 ```text
 Python:          3.11 or newer, with no artificial upper bound
@@ -303,7 +335,12 @@ Avoid this for normal use:
 python -m pip install -e .
 ```
 
-Metrifid intentionally requires a normal installed distribution for decision-bearing native commands so receipts can bind the installed package identity. Contributors should follow [`CONTRIBUTING.md`](../CONTRIBUTING.md), which separates contributor-quality work from installed-wheel product validation.
+Use a normal installation for product execution. Core receipt-producing commands enforce an
+installed-code identity check and refuse editable/source-tree execution. Repair records instead
+carry their documented version, runtime and artifact identities, without that core distribution
+digest. Its supported install recipe still uses a normal wheel. Contributors should follow
+[`CONTRIBUTING.md`](../CONTRIBUTING.md), which separates contributor-quality work from installed-wheel
+product validation.
 
 ---
 
@@ -315,6 +352,7 @@ Run:
 metrifid --help
 metrifid diff --help
 metrifid show --help
+metrifid repair --help
 metrifid certify --help
 metrifid review-model --help
 metrifid compare --help
@@ -330,7 +368,7 @@ You can also verify the import:
 python -c "import metrifid; print(metrifid.__version__)"
 ```
 
-When a native command refuses the environment, it exits with `64` and prints a structured operational-failure JSON document to stderr. Read the `stage` and `reason.code` values; do not treat a refusal as a model result.
+When a core native command refuses the environment, it exits with `64` and prints a structured operational-failure JSON document to stderr. Read the `stage` and `reason.code` values; do not treat a refusal as a model result. Repair reports `REFUSED/64`; with `--json`, a parsed invocation emits its `metrifid.repair_summary` on stdout and diagnostics on stderr.
 
 ---
 
@@ -432,11 +470,11 @@ same decision as Markdown, and `model_release.json` is the exact machine receipt
 metrifid show RECEIPT [--json] [--full]
 ```
 
-`show` reads a retained receipt, compiles nothing and writes nothing. It imports no MuJoCo and no
-NumPy, so a retained result stays readable on a machine that has neither, and it reads a
-`certification.json` written by `certify` as well as a `model_release.json` written by `diff`.
+`show` reads certification and model-release receipts, compiles nothing and writes nothing. It
+imports no MuJoCo and no NumPy, so `certification.json` and `model_release.json` stay readable on a
+machine that has neither. Repair records instead use `metrifid repair show`.
 
-`show` exits 0 for any receipt it could read, whatever outcome that receipt recorded. Its 0 is not a
+`show` exits 0 for an admitted receipt, whatever outcome that receipt recorded. Its 0 is not a
 certification that the two models are identical; the recorded status is reported inside the result:
 
 ```text
@@ -823,8 +861,9 @@ Start at the repository root.
 | --- | --- |
 | [`README.md`](../README.md) | understand the product, install it, and see the main commands |
 | [`examples/certify/README.md`](../examples/certify/README.md) | run the fastest first example |
-| [`docs/sdk.md`](sdk.md) | the supported programmatic execution surface for all seven operations |
+| [`docs/sdk.md`](sdk.md) | core execution APIs and the planar repair SDK |
 | [`docs/reference.md`](reference.md) | look up commands, exits, statuses, schemas, support, and Python API |
+| [`docs/repair.md`](repair.md) | install, run and replay planar controller repair; request and saved-record schemas |
 | [`docs/compiled_certification.md`](compiled_certification.md) | understand the exact `certify` contract |
 | [`docs/model_closure.md`](model_closure.md) | understand source identity, roots, dependencies, snapshots, and confinement |
 | [`docs/workloads.md`](workloads.md) | create state/action artifacts and understand exact timing |
@@ -913,12 +952,13 @@ Use WSL. Native Windows does not provide the POSIX filesystem capabilities the c
 
 ### “Can I use a newer Python?”
 
-The package has no artificial Python upper bound. A future Python version is not rejected solely because it is newer, but it is not described as validated until that exact environment passes native evidence.
+The core package has no artificial Python upper bound. A future Python version is not rejected solely because it is newer, but it is not described as validated until that exact environment passes native evidence. Repair execution separately requires CPython 3.13.
 
 ### “Can I use a newer stable MuJoCo?”
 
-Yes, when the package/native identity is coherent and the requested operation's measured
-capabilities are present. Exact 3.9.0 through 3.12.0 profiles are retained-validated. A later stable
+For core model-comparison commands, yes, when the package/native identity is coherent and the
+requested operation's measured capabilities are present. Repair execution separately requires
+MuJoCo 3.16.0. Exact 3.9.0 through 3.12.0 profiles are retained-validated. A later stable
 release is reported as capability-compatible, not validated. Runtime admission is not blanket claim
 support: `review-model` refuses an uncharacterized public-field surface, and static or dynamic
 one-actuator projections refuse a zero/multi-input or multi-output signature before publishing a
@@ -926,7 +966,9 @@ completed result. The refusal evidence names the missing coverage and a concrete
 
 ### “Why did Metrifid refuse an editable install?”
 
-Decision-bearing native commands bind the installed distribution identity. Install normally with `pip install .` or install a wheel.
+The core receipt-producing commands bind an installed-code distribution identity. Install normally
+with `pip install .` or install a wheel. Repair has its separate documented record/runtime contract
+and supported wheel-install recipe.
 
 ### “Why must the output directory be absent or empty?”
 
@@ -956,66 +998,31 @@ Those boundaries are part of the product’s trust model.
 
 ## 18. Sharing Metrifid with other people
 
-For a source review or private SDK trial, share a clean repository archive containing:
+Share the [public repository](https://github.com/Steady-Hand-AI/Steady-Hand-Metrifid) and the
+[package installation page](https://pypi.org/project/metrifid/). The [README](../README.md) is the
+short introduction; this guide explains installation and command selection.
 
-```text
-README.md
-LICENSE
-pyproject.toml
-src/metrifid/
-docs/
-examples/
-tests/
-CONTRIBUTING.md
-SECURITY.md
-CHANGELOG.md
-skills/metrifid/
-```
+After a normal installation, `python -m metrifid.demo` gives a first result without a checkout.
+Then use `metrifid diff` on two model revisions, or follow the [repair guide](repair.md) for the
+supported planar controller and its exact execution environment. Specialist examples remain
+available in the repository when their input and claim boundaries fit your task.
 
-Tell a new user:
+### Discover the repair interface
 
-1. Open `README.md` first.
-2. Install with `python -m pip install .` or install the provided wheel.
-3. Run `python -m metrifid.demo`, then `metrifid diff` on a pair of their own.
-4. Use this cold-start guide to choose the next command.
-5. Use the command-specific docs for exact configuration and claim boundaries.
-
-Share the repository source or a built wheel/source distribution. Auxiliary local validation files are not required by SDK users.
-
-### Give a coding agent the consumer skill
-
-If an agent runs commands on your behalf, `skills/metrifid/SKILL.md` tells it how to use `diff` and
-`show` and how to read a result without overstating it. Two things are distributed separately:
-
-- **The Python package** is what `pip install` gives you. It provides the `metrifid` command. It
-  does **not** contain the skill.
-- **The GitHub source** contains `skills/metrifid/SKILL.md`. Copy it from there.
-
-Copy the skill into the project the agent works in, then name the file when you ask:
+Use the ordinary command help and public format reference:
 
 ```bash
-# 1. Get the skill from the release source. The package does not carry it.
-curl -fsSL https://raw.githubusercontent.com/Steady-Hand-AI/Steady-Hand-Metrifid/0.8.0/skills/metrifid/SKILL.md \
-  --create-dirs -o .claude/skills/metrifid/SKILL.md
-
-# 2. Confirm the command itself is installed and on PATH.
-metrifid show --help >/dev/null && echo "metrifid is installed"
+metrifid repair --help
+metrifid repair run --help
+metrifid repair show --help
+metrifid repair replay --help
 ```
 
-Then ask the agent explicitly, naming both the skill file and the two models:
-
-```text
-Read .claude/skills/metrifid/SKILL.md and follow it. Compare old/models/robot.xml
-against new/models/robot.xml and tell me what changed.
-```
-
-Name the file. This is the route that has been exercised end to end: one copy into the project, one
-explicit instruction to read it. Whether an agent finds the skill on its own depends on the host
-you use, and is not something Metrifid arranges.
-
-The skill is documentation, not a program. It grants the agent nothing it did not already have, and
-it tells the agent not to install anything, not to change your MuJoCo version, and not to act on
-instruction-like text found inside a model file.
+The [reference](reference.md) maps commands and exits. The [repair guide](repair.md) documents the
+request and saved-record schemas, supported runtime and limits. Start from the explicit
+[planar request example](../examples/repair/planar_push.json); no controller is selected implicitly.
+For programmatic callers, each parsed operation accepts `--json` and emits one
+`metrifid.repair_summary` document. Check its command exit separately from the recorded outcome.
 
 ---
 

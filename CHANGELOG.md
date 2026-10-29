@@ -4,6 +4,41 @@ Notable changes to `metrifid`. Starting with `0.2.0`, release identifiers use ex
 dot-separated integer components: `MAJOR.MINOR.PATCH`. Historical development entries below
 remain as an audit trail and do not define the current release version.
 
+## 0.9.0
+
+### Added
+
+- `metrifid repair run`, `repair show` and `repair replay`, with matching `metrifid.repair` Python
+  APIs, support one fixed planar pushing family. Requests supply three editable task fields and
+  15 normalized starting controller parameters; bounded coordinate polling adjusts the parameters
+  and separately confirms a qualifying controller at both timesteps.
+- Portable JSON run bundles retain the generated scenes, physical reset and selected controller.
+  Saved-result reading validates internal consistency without MuJoCo or NumPy. Independent replay
+  uses the retained bundle after relocation and evaluates the selected controller afresh without
+  optimization or access to the original request.
+- Human and JSON output distinguish confirmed qualification, finite nonqualification, incomplete
+  execution, refusal and operational error. Integration counts and CPU measurements describe actual
+  work, including partial evaluations; unavailable work is not reported as zero. Qualification is
+  simulation only, with no global-optimum, robustness or hardware-safety guarantee.
+- A public request example and an installed-console check exercise repair, reading and independent
+  replay on Linux x86_64 with CPython 3.13, MuJoCo 3.16.0 and NumPy 2.5.4. Existing CI and registry
+  verification use the same bounded check in a separate environment.
+
+### Changed
+
+- Installation and command documentation include repair's supported runtime, request and saved-record
+  schemas, finite limits, and human/JSON workflows. Ordinary help and public documentation replace
+  the source-only consumer skill.
+- Generic `metrifid show` documentation now states its certification/model-release receipt scope;
+  repair records use `metrifid repair show`.
+
+### Unchanged
+
+- Core model-comparison commands, compiled-identity receipts and offline HTML reports retain their
+  existing interfaces and behavior. Repair publishes JSON bundles and no HTML report.
+- Core Python >=3.11 support and MuJoCo dependency markers, including the Intel macOS packaging
+  bound, remain unchanged. Repair's exact runtime requirements apply only to its execution path.
+
 ## 0.8.0
 
 ### Added
@@ -14,8 +49,8 @@ remain as an audit trail and do not define the current release version.
   Markdown summary `model_release.md`, published together into `~/.metrifid/runs/<run>/` or into
   the directory given by `--output`, with the offline HTML report `report.html` written beside them
   afterwards.
-- `metrifid show RECEIPT` reads a retained receipt and reports what that run recorded, including
-  its status and the exit code it took. Reading needs no MuJoCo and no NumPy, so a result stays
+- `metrifid show RECEIPT` reads a certification or model-release receipt and reports what that run
+  recorded, including its status and the exit code it took. Reading needs no MuJoCo and no NumPy, so a result stays
   readable on a machine that cannot compile the models, and after the compared files are gone.
 - The offline HTML report is a plain, self-contained page: no scripts, no remote references, and
   no network access. It presents the same reading the terminal view shows — the `metrifid.result`
@@ -37,9 +72,7 @@ remain as an audit trail and do not define the current release version.
   complete document, bounded at 262144 bytes: only a document that would exceed that ceiling is
   replaced by a summary of itself, marked `truncated`. `--full` lifts the ceiling, so a very large
   result keeps every finding, both source inventories and every producer omission row.
-- `skills/metrifid/SKILL.md` documents the two routes for an agent acting on a user's behalf. It
-  ships in the GitHub source only, not in the Python package; `docs/getting_started.md` describes
-  how to copy it into a project and invoke it explicitly.
+- Source documentation added usage guidance for automated callers of `diff` and `show`.
 
 ### Changed
 
@@ -258,8 +291,6 @@ revalidated against the bytes it was actually decided from.
   though their retained bytes and SHA-256 identities differ. A one-ULP nonzero difference is still
   rejected, and the immutable schema-version-1 worker identity and its historical evidence route are
   unchanged.
-- Private selected-method refusals use the case's declared finite horizon rather than a fixed
-  one-second endpoint.
 
 ### Model Review
 
@@ -285,9 +316,8 @@ revalidated against the bytes it was actually decided from.
   printing a passing token.
 - `examples/sdk/workload_qualification_api.py` is a complete installed-wheel SDK journey that builds
   its own inputs, runs one bounded campaign, and revalidates the published receipt.
-- `docs/public_cases.md` documents what each case exercises, what its independent control measures,
-  and what none of them claims, together with the external Robosuite Jaco study measured at one
-  pinned upstream commit on the newest characterized runtime.
+- `docs/public_cases.md` documents what each shipped case exercises, what its independent control
+  measures, and what none of the cases claims.
 - The public documentation is organised around the change you actually made rather than around the
   command list. The README, the getting-started guide and the capabilities document open with two
   primary routes — a model or asset changed, or the MuJoCo runtime changed — and lead from the first
@@ -302,8 +332,8 @@ revalidated against the bytes it was actually decided from.
 
 ## Superseded development entries — 0.4.0.dev0 candidate
 
-- Begin the non-release Metrifid 0.4.0 Model Change Gate candidate. This development identity does
-  not authorize publication, tagging, or replacement of the immutable public 0.2.1 release.
+- Work toward the Model Change Gate used the unreleased development version `0.4.0.dev0`.
+  These changes were subsequently included in `0.7.0`; `0.2.1` remained the preceding public release.
 - Bind every Model Change Gate and Certify decision consumer to the exact compiled subjects the
   embedded receipt identifies. A private complete MJB is now sealed and its directory entry removed
   as soon as it is written, so the artifact survives only as a retained descriptor with no pathname

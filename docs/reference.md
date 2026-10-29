@@ -32,6 +32,18 @@ metrifid diff BASELINE_MJCF CANDIDATE_MJCF \
 metrifid show RECEIPT [--json] [--full]
 ```
 
+The separate planar controller workflow uses these routes:
+
+```bash
+metrifid repair run REQUEST_JSON --output NEW_DIRECTORY [--json]
+metrifid repair show RESULT_JSON [--json]
+metrifid repair replay RUN_DIRECTORY --output NEW_DIRECTORY [--json]
+```
+
+`show` admits certification and model-release receipts only. Repair records use `repair show`.
+The [repair guide](repair.md) contains the supported family, request and saved-record schemas,
+finite limits and a complete run → show → moved-bundle replay example.
+
 ## Runtime support
 
 The five model commands — `certify`, `review-model`, `compare`, `audit-timestep` and
@@ -59,6 +71,10 @@ external CPython profiles through its own fixed preflight collector before invok
 frozen worker in each, and never substitutes the installed process's admission for those
 profile-specific measurements. Neither route discovers, installs, selects, upgrades or repairs an
 environment.
+
+`repair run` and `repair replay` require Linux x86_64, CPython 3.13, MuJoCo 3.16.0 and NumPy 2.5.4.
+This is a separate, narrower execution envelope; it does not change the core dependency markers.
+Repair help, request admission and saved-result reading import neither MuJoCo nor NumPy.
 
 Pure workload writers and canonical JSON, exact-number, and receipt-validation helpers do not invoke
 the native runtime gate.
@@ -88,18 +104,29 @@ the native runtime gate.
 | `40` | `review-runtime`, `run-runtime-review` | `OUTSIDE_DECLARED_MIGRATION_ENVELOPE` — a decisive witness places the candidate outside the declared migration envelope |
 | `0` | `diff` | `NO_COMPILED_CHANGE` — the complete MJBs matched |
 | `40` | `diff` | `REVIEW_REQUIRED` — the compiled artifacts differ |
-| `0` | `show` | the receipt was read; the outcome it recorded is reported, not replaced |
+| `0` | `show` | the certification or model-release receipt was read; its recorded outcome is preserved |
+| `0` | `repair run` | `REPAIRED` or `ALREADY_QUALIFIED` — complete paired confirmation qualified |
+| `10` | `repair run` | `NO_QUALIFIED_POLICY_FOUND` — finite nonqualification or finite search bound |
+| `0` / `10` | `repair replay` | `QUALIFIED` / `NOT_QUALIFIED` — fresh paired evaluation |
+| `20` | `repair run`, `repair replay` | `INCOMPLETE` — interrupted or unresolved evidence |
+| `0` | `repair show` | `READ` — saved status, exit and qualification are reported separately |
 | `64` | any | invalid invocation, input or output |
 | `70` | any | internal failure |
 
-Exit `64` is an operational refusal and exit `70` is an internal failure. Both mean no completed
-decision was reached, and for either the CLI writes one strict `metrifid.operational_failure` JSON
+For the core commands, exit `64` is an operational refusal and exit `70` is an internal failure.
+Both mean no completed decision was reached, and for either the CLI writes one strict
+`metrifid.operational_failure` JSON
 document to stderr naming its stage and reason code. For `diff` and `show`, a recognized request
 that asked for `--json` also receives one `metrifid.result` document on stdout carrying the same
 reason and exit code, so a caller parsing stdout can read an ordinary usage error too. That holds
 for exit `64` and for the bounded failures the reader itself raises. An unexpected error caught at
 the CLI's defensive boundary exits `70` and writes only the `metrifid.operational_failure` document
 to stderr, so empty stdout must not be read as a parse failure — check the exit code first.
+
+Repair uses `REFUSED/64` and `ERROR/70`. Every successfully parsed repair invocation with `--json`
+emits exactly one `metrifid.repair_summary` on stdout, including refusals and errors; diagnostics
+remain on stderr. Syntax failures return `64` with empty stdout. See the [repair outcome table](repair.md#outcomes-costs-and-partial-output)
+for incomplete evidence and publication-failure behavior.
 
 ## Statuses
 
@@ -147,7 +174,7 @@ one exit mapping. See [`runtime_review.md`](runtime_review.md) for what each sta
 
 ## Schemas
 
-Decision-bearing JSON is canonical and carries a self-hash over its own content: the certification,
+Core decision-bearing JSON is canonical and carries a self-hash over its own content: the certification,
 comparison, model-release, workload-qualification and Runtime Review receipts, the timestep-audit
 aggregate, the Runtime Review run record, and published native-profile identity documents each
 recompute their own digest on validation.
@@ -180,6 +207,18 @@ complete result.
 | `metrifid.runtime_review.integration_state_sentinel`, version `1` | inside a schema-version-2 profile identity |
 | `metrifid.runtime_review_process_command`, version `1` | `command.json` in each retained process directory |
 | `metrifid.result`, version `1` | stdout from `diff --json` or `show --json` |
+| `metrifid.repair_request`, version `1` | the explicit planar task and starting controller you supply |
+| `metrifid.repair_result`, version `1` | `repair.json` |
+| `metrifid.repair_replay`, version `1` | `replay.json` |
+| `metrifid.repair_summary`, version `1` | stdout from a parsed repair invocation with `--json` |
+| `metrifid.repair_policy`, version `1` | selected `policy.json` in a run bundle |
+| `metrifid.repair_reset`, version `1` | generated `reset.json` in a run bundle |
+
+Repair records are bounded decimal JSON with exact binary64 round trips, not the core exact-number
+encoding. They bind their declared artifacts by exact byte size and SHA-256, and replay binds the
+source repair record digest. They carry no whole-document self-hash or signature. The full
+[repair format reference](repair.md#saved-format-version-1) defines each field and the consistency
+checks; hashes do not establish authorship or new simulation evidence.
 
 Runtime Review keeps schema version `1` as the immutable historical route and validates it, while a
 new run emits version `2`: `run-runtime-review` generates its downstream review configuration at
@@ -305,13 +344,14 @@ not recompile external source artifacts.
 
 ## Canonical values
 
-Numbers that must survive a round trip exactly are never written as JSON floats:
+The core receipt format uses explicit exact-number objects rather than JSON floats:
 
 - an exact rational is `{"numerator": <int>, "denominator": <int>}`, always normalized;
 - an IEEE-754 double is `{"kind": "ieee754_binary64", "bits": "<16 lowercase hex>"}`.
 
-`NaN` and the infinities are representable and survive unchanged. See
-[`canonicalization.md`](canonicalization.md).
+`NaN` and the infinities are representable and survive unchanged in that encoding. See
+[`canonicalization.md`](canonicalization.md). Repair instead uses its separately documented bounded
+decimal JSON format; unavailable or nonfinite measurements are explicit `null` values with reasons.
 
 ## Python API
 
@@ -323,8 +363,14 @@ The supported programmatic **execution** surface is documented in [`docs/sdk.md`
 `metrifid.runtime_review.run_runtime_review_configuration_file`. Each of the seven expert CLI
 commands is a thin wrapper over one of those functions. The `diff` and `show` routes add no eighth
 decision function: `diff` runs the same model-release review with a generated empty policy, and
-`show` only reads a receipt that review already published. The table below covers the supporting
-value types and helpers.
+`show` reads an existing certification or model-release receipt. The tables below cover the
+supporting value types and helpers.
+
+The separate [`metrifid.repair` API](repair.md#python-file-workflow) exposes `load_request`,
+`repair_controller` and `replay_controller`, plus the file workflows `run_request_file`,
+`read_result_file` and `replay_run_directory`. Importing these names does not load MuJoCo or NumPy.
+Native loading occurs inside repair/replay execution after request admission.
+Reading a saved result validates internal consistency without rerunning simulation.
 
 ### `metrifid.runtime_review`
 
@@ -377,8 +423,11 @@ probe, workload, cell, group, limitation and cardinality types are internal impl
 they are not exported, several of their constructors require internal types, and they may change
 without a compatibility guarantee.
 
-Importing `metrifid.workload_qualification` performs no filesystem, network, or native-runtime work.
-MuJoCo is loaded only when an execution or receipt-validation name is first resolved.
+Importing `metrifid.workload_qualification` performs no filesystem, network, or native-runtime
+work. Status and error names remain native-free when resolved. Resolving `QualificationResult`,
+`qualify_configuration_file` or `load_and_validate_workload_qualification_receipt` imports their
+implementation modules, which also load MuJoCo and NumPy. Resolving a name does not itself run a
+qualification or validate a receipt. This differs from the native-free repair imports above.
 
 
 ```python
@@ -474,8 +523,14 @@ A certification receipt is runtime-bound. It records the runtime identity that p
 artifacts and claims only what that runtime produced; it does not claim that another operating
 system, MuJoCo version or build would produce the same digest.
 
+Repair execution uses the narrower Linux x86_64 / CPython 3.13 / MuJoCo 3.16.0 / NumPy 2.5.4
+envelope described in the [repair guide](repair.md). Package metadata and the core support
+envelope above are unchanged.
+
 ## Installed identity
 
-The tool refuses to run from an editable install, from a source tree on `sys.path`, or when more
-than one `metrifid` distribution is visible. Every receipt records the version and the
-distribution digest of the code that produced it.
+The core receipt-producing operations refuse an editable install, a source tree on `sys.path`,
+or more than one visible `metrifid` distribution. Their receipts record the version and
+distribution digest of the producing code. Repair has its own runtime admission and record
+schemas: its records bind the tool version, request, retained artifacts and execution runtime,
+without a distribution digest. See the [repair guide](repair.md) for that separate contract.

@@ -23,8 +23,10 @@ probe, workload, cell, group, limitation and cardinality types are internal impl
 they remain reachable from their private modules for testing, but they are not part of this
 compatibility surface, and several of their constructors require internal types.
 
-Importing this module performs no filesystem, network, or native-runtime work. MuJoCo is loaded only
-when an execution or receipt-validation name is first resolved.
+Importing this module performs no filesystem, network, or native-runtime work. Resolving status and
+error names remains native-free. Resolving QualificationResult, qualify_configuration_file or the
+receipt loader imports their implementation modules, which also load MuJoCo and NumPy. Resolving a
+name does not run a qualification or validate a receipt.
 """
 
 from __future__ import annotations

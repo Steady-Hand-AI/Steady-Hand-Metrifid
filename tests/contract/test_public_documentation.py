@@ -1,15 +1,7 @@
-"""The public documents must keep leading with the change the reader actually made.
+"""Keep public entry points, provenance, links and claim boundaries discoverable.
 
-The documentation was reorganized around two primary routes — a model or asset changed, or the
-MuJoCo runtime changed — because a reader arriving with a broken pull request should not have to
-choose between seven equally weighted commands first. That structure is easy to erode: a later edit
-reorders a section, renames a heading, drops one of the two exact commands, or reintroduces the
-stale claim that the current source answers only three questions.
-
-This is a bounded structural contract. It asserts headings, exact commands, required semantic
-concepts, and link targets, and it deliberately does not assert whole prose blocks, so the wording
-stays free to improve. It reads files and resolves relative targets on disk; it never uses the
-network.
+These checks cover command examples, supported API names, analogue attribution and link targets.
+They leave prose free to improve and inspect local documents without using the network.
 """
 
 from __future__ import annotations
@@ -30,7 +22,7 @@ _CERTIFY_COMMAND = "metrifid certify old/robot.xml new/robot.xml --output out/"
 _RUNTIME_COMMAND = "metrifid run-runtime-review runtime_review_run.json"
 _GALLERY_COMMAND = "python examples/public_cases/run_all.py --output /absolute/absent/output"
 
-_ACCEPTED_COMMANDS = (
+_CORE_COMMANDS = (
     "certify",
     "review-model",
     "compare",
@@ -39,6 +31,8 @@ _ACCEPTED_COMMANDS = (
     "review-runtime",
     "run-runtime-review",
 )
+_ADDITIONAL_ROUTES = ("diff", "show", "repair run", "repair show", "repair replay")
+_ACCEPTED_COMMANDS = (*_CORE_COMMANDS, *_ADDITIONAL_ROUTES)
 
 _EVIDENCE_COMMANDS = (
     "review-model",
@@ -53,6 +47,7 @@ _README_HEADINGS = (
     "## Start with the change you made",
     "### Your model or asset changed",
     "### Your MuJoCo runtime changed",
+    "### Your planar controller misses its target",
     "## Follow the evidence",
 )
 
@@ -61,6 +56,7 @@ _GETTING_STARTED_HEADINGS = (
     "## Choose your starting point",
     "### A model or asset changed",
     "### The MuJoCo runtime changed",
+    "### A planar pushing controller misses its target",
     "## Continue from the first result",
     "## Run the complaint-backed public cases",
     "## Documentation map",
@@ -81,16 +77,13 @@ _PUBLIC_CASE_HEADINGS = (
     "## Mesh inertia",
     "## Actuator transmission",
     "## Sensor attachment",
-    "## External Robosuite Jaco study",
     "## How to interpret the decisions",
     "## Claim boundaries",
 )
 
-# The two routes must be reachable before any seven-equal-choice menu. A reader who meets the full
-# command table first has already lost the benefit of the reorganization.
+# The starting routes must be reachable before the full expert command menu.
 
 
-_STATUS_TOKEN = re.compile(r"\b(?:NOT_)?REPRODUCED_ON_CURRENT_RUNTIME\b|\breproduction_status\b")
 # "reproducible" describes deterministic bytes, not a claim about upstream behavior, so the
 # claim words are matched exactly rather than by prefix.
 _REPRODUCTION = re.compile(r"\breproduc(?:e|es|ed|ing|tion|tions)\b", re.IGNORECASE)
@@ -100,17 +93,12 @@ _NEGATION = re.compile(
 
 
 def _unnegated_reproduction_claims(flat_text: str) -> list[str]:
-    """Return every mention of reproduction that is not denied by a nearby negation.
-
-    The external study reports a status vocabulary that contains the word, so those exact tokens are
-    removed before the prose is inspected.
-    """
-    prose = _STATUS_TOKEN.sub(" ", flat_text)
+    """Return every mention of reproduction that is not denied by a nearby negation."""
     found: list[str] = []
-    for match in _REPRODUCTION.finditer(prose):
-        window = prose[max(0, match.start() - 70) : match.start()]
+    for match in _REPRODUCTION.finditer(flat_text):
+        window = flat_text[max(0, match.start() - 70) : match.start()]
         if _NEGATION.search(window) is None:
-            found.append(prose[max(0, match.start() - 70) : match.end() + 30].strip())
+            found.append(flat_text[max(0, match.start() - 70) : match.end() + 30].strip())
     return found
 
 
@@ -216,8 +204,8 @@ def test_every_required_public_document_exists(name: str) -> None:
     assert _document(name).is_file(), f"{name} is missing"
 
 
-def test_readme_leads_with_the_two_primary_routes() -> None:
-    """The README must present both starting points before the detailed command reference."""
+def test_readme_leads_with_the_three_starting_routes() -> None:
+    """The README must present model, runtime and repair routes before the command reference."""
     path = _document("README.md")
     _assert_headings_in_order(path, _README_HEADINGS)
 
@@ -233,6 +221,10 @@ def test_readme_leads_with_the_two_primary_routes() -> None:
         runtime_route,
         "the runtime route must carry the exact runtime review command",
     )
+
+    repair_route = _section_body(path, "### Your planar controller misses its target")
+    check.is_in("metrifid repair --help", repair_route)
+    check.is_in("planar_push_timed15_v1", repair_route)
 
     evidence = _section_body(path, "## Follow the evidence")
     for command in _EVIDENCE_COMMANDS:
@@ -250,26 +242,29 @@ def test_readme_states_the_required_claim_boundaries() -> None:
         check.is_in(phrase, text, f"the README must state: {phrase}")
 
 
-def test_no_seven_choice_menu_precedes_the_two_routes() -> None:
+def test_no_full_core_command_menu_precedes_the_starting_routes() -> None:
     """A full command menu placed first would undo the point of the reorganization."""
     text = _document("README.md").read_text(encoding="utf-8")
     routes_end = text.index("## Follow the evidence")
     preamble = text[:routes_end]
-    named = [command for command in _ACCEPTED_COMMANDS if command in preamble]
+    named = [command for command in _CORE_COMMANDS if command in preamble]
     check.less(
         len(named),
-        len(_ACCEPTED_COMMANDS),
-        "the README names all seven commands before both primary routes are presented",
+        len(_CORE_COMMANDS),
+        "the README names all core commands before the starting routes are presented",
     )
 
 
 def test_getting_started_routes_the_reader_from_the_first_result() -> None:
-    """The guide must offer both starting points and map each follow-up question to one command."""
+    """The guide must offer all three routes and map follow-up questions to commands."""
     path = _document("docs/getting_started.md")
     _assert_headings_in_order(path, _GETTING_STARTED_HEADINGS)
 
     check.is_in(_CERTIFY_COMMAND, _section_body(path, "### A model or asset changed"))
     check.is_in(_RUNTIME_COMMAND, _section_body(path, "### The MuJoCo runtime changed"))
+    repair_route = _section_body(path, "### A planar pushing controller misses its target")
+    check.is_in("metrifid repair --help", repair_route)
+    check.is_in("planar_push_timed15_v1", repair_route)
 
     continuation = _section_body(path, "## Continue from the first result")
     for concept, command in (
@@ -286,14 +281,16 @@ def test_getting_started_routes_the_reader_from_the_first_result() -> None:
     check.is_in(_GALLERY_COMMAND, gallery, "the guide must carry the exact gallery command")
 
 
-def test_capabilities_describes_the_accepted_seven_command_surface() -> None:
-    """The capabilities document must describe the real surface, not a stale three-question one."""
+def test_capabilities_describes_core_commands_and_the_separate_repair_routes() -> None:
+    """Core expert commands, model conveniences and planar repair must all be discoverable."""
     path = _document("docs/capabilities_and_use_cases.md")
     _assert_headings_in_order(path, _CAPABILITIES_HEADINGS)
 
     surface = _section_body(path, "## The accepted command surface")
-    for command in _ACCEPTED_COMMANDS:
-        check.is_in(command, surface, f"the accepted surface must name {command}")
+    for command in _CORE_COMMANDS:
+        check.is_in(f"`{command}`", surface, f"the core surface must name {command}")
+    for command in _ADDITIONAL_ROUTES:
+        check.is_in(f"metrifid {command}", surface, f"the accepted surface must name {command}")
 
 
 def test_capabilities_names_the_prior_release_only_as_the_prior_release() -> None:
@@ -335,7 +332,7 @@ def test_no_public_document_calls_a_completed_decision_a_crash() -> None:
 
 
 def test_public_case_document_has_the_required_structure() -> None:
-    """Each case family and the external study need their own named section."""
+    """The six owned cases need discoverable mechanism sections and a runnable gallery command."""
     path = _document("docs/public_cases.md")
     _assert_headings_in_order(path, _PUBLIC_CASE_HEADINGS)
     check.is_in(
@@ -444,10 +441,8 @@ def _anchor_exists(path: Path, anchor: str) -> bool:
 
 # ---- The reference and SDK documents must cover the whole public surface ----------------------------
 #
-# Metrifid 0.7.0 includes both Runtime Review routes, while the reference and SDK documents described a
-# five-command product. Each helper below returns concrete problems for one semantic property, and the
-# same helper is applied to the real document and to a mutated copy, so a control proves the assertion
-# reacts rather than proving that string replacement works.
+# Command examples and APIs must retain every supported route. Focused controls remove a real
+# documented command, schema row or function section and reuse the corresponding assertion.
 
 _RUNTIME_REVIEW_FUNCTIONS = (
     "review_runtime_configuration_file",
@@ -480,13 +475,13 @@ _STALE_SURFACE_COUNTS = ("all five operations", "five execution entry points")
 _TABLE_ROW = re.compile(r"(?m)^\|.*\|\s*$")
 
 
-def _fenced_block_after(text: str, heading: str) -> str:
-    """Return the first fenced block that follows `heading`, or an empty string."""
-    start = text.find(heading)
-    if start < 0:
-        return ""
-    fence = re.search(r"(?ms)^(?P<fence>```|~~~).*?\n(?P<body>.*?)^(?P=fence)", text[start:])
-    return fence.group("body") if fence else ""
+def _fenced_blocks_after(text: str, heading: str) -> str:
+    """Return the fenced examples within one section, excluding surrounding prose."""
+    section = _section_after(text, heading)
+    fences = re.finditer(
+        r"(?ms)^(?P<fence>```|~~~)[^\n]*\n(?P<body>.*?)^(?P=fence)[ \t]*$", section
+    )
+    return "\n".join(fence.group("body") for fence in fences)
 
 
 def _section_after(text: str, heading: str) -> str:
@@ -504,8 +499,8 @@ def _section_after(text: str, heading: str) -> str:
 
 
 def command_surface_problems(text: str) -> list[str]:
-    """Every accepted command must appear in the Commands block itself, not merely somewhere later."""
-    block = _fenced_block_after(text, "## Commands")
+    """Every accepted route must appear in a Commands example, not merely in later prose."""
+    block = _fenced_blocks_after(text, "## Commands")
     if not block:
         return ["the Commands section has no fenced command block"]
     return [
@@ -600,7 +595,7 @@ def _sdk() -> str:
 
 
 def test_the_reference_command_block_lists_every_accepted_command() -> None:
-    """The Commands block is the command surface."""
+    """The Commands examples cover core, convenience and repair routes."""
     assert command_surface_problems(_reference()) == []
 
 
@@ -626,17 +621,29 @@ _SDK_API_HEADINGS = (
 )
 
 
-def test_both_documents_expose_the_runtime_review_api() -> None:
-    """Both execution functions are public, so both belong in the documented API surface."""
+def test_both_documents_expose_runtime_review_and_the_separate_repair_api() -> None:
+    """The SDK guide must retain core APIs and direct repair callers to its own contract."""
     assert runtime_review_api_problems(_reference(), _REFERENCE_API_HEADINGS) == []
     assert runtime_review_api_problems(_sdk(), _SDK_API_HEADINGS) == []
+    repair = _section_after(_sdk(), "## Planar controller repair")
+    for function in (
+        "load_request",
+        "repair_controller",
+        "replay_controller",
+        "run_request_file",
+        "read_result_file",
+        "replay_run_directory",
+    ):
+        check.is_in(function, repair, f"the separate repair SDK section must name {function}")
+        check.is_in(function, _reference(), f"the reference must name {function}")
+    check.is_in("repair.md#python-file-workflow", _RELATIVE_LINK.findall(repair))
 
 
 @pytest.mark.parametrize(
     "name", ["README.md", "docs/getting_started.md", "docs/sdk.md", "docs/reference.md"]
 )
 def test_no_active_document_counts_the_execution_surface_at_five(name: str) -> None:
-    """Metrifid 0.7.0 includes two Runtime Review routes; a document counting five is stale."""
+    """The core APIs include both Runtime Review routes; a document counting five is stale."""
     assert stale_surface_count_problems(_document(name).read_text(encoding="utf-8")) == []
 
 
@@ -650,6 +657,14 @@ def test_no_active_document_counts_the_execution_surface_at_five(name: str) -> N
             command_surface_problems,
             "does not show `metrifid run-runtime-review`",
             id="command_removed_from_the_commands_block",
+        ),
+        pytest.param(
+            lambda text: text.replace(
+                "metrifid repair replay RUN_DIRECTORY --output NEW_DIRECTORY [--json]\n", "", 1
+            ),
+            command_surface_problems,
+            "does not show `metrifid repair replay`",
+            id="repair_replay_removed_from_the_commands_section",
         ),
         pytest.param(
             lambda text: text.replace(
@@ -788,7 +803,7 @@ def intel_packaging_exception_problems(text: str) -> list[str]:
 
 
 def runtime_admission_breadth_problems(text: str) -> list[str]:
-    """Return a problem if the document stopped saying runtime admission is 3.9-or-newer."""
+    """Keep the core capability-based MuJoCo floor documented alongside narrower repair support."""
     flat = _flattened(text).lower()
     if "3.9" not in flat:
         return ["the document no longer states the stable MuJoCo 3.9 floor"]
