@@ -216,7 +216,7 @@ jobs:
           print(json.dumps(manifest, indent=2, sort_keys=True))
           PY
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: ${{ env.ORIGINAL_ARTIFACT }}
           path: |
@@ -492,7 +492,7 @@ jobs:
           printf '%s\n' '${{ matrix.id }}' > lane-evidence/lane_id.txt
           printf '%s\n' '${{ matrix.tier }}' > lane-evidence/tier.txt
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         if: always()
         with:
           name: lane-${{ matrix.id }}
@@ -655,7 +655,7 @@ jobs:
           printf '%s\n' 'linux_x64_py311_numpy_min' > lane-evidence/lane_id.txt
           printf '%s\n' 'full' > lane-evidence/tier.txt
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         if: always()
         with:
           name: lane-linux_x64_py311_numpy_min
@@ -784,7 +784,7 @@ jobs:
           cp release-artifacts/original_manifest.json retained-evidence/original_manifest.json
           printf '%s\n' '${{ matrix.role }}' > retained-evidence/profile_role.txt
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         if: always()
         with:
           name: retained-${{ matrix.role }}
@@ -906,7 +906,7 @@ jobs:
       - name: Record sdist lane evidence
         run: cp release-artifacts/original_manifest.json sdist-evidence/original_manifest.json
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         if: always()
         with:
           name: sdist-install-evidence
@@ -998,7 +998,7 @@ jobs:
           ), report
           PY
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: distribution-equivalence
           path: equivalence/
@@ -1131,7 +1131,7 @@ jobs:
           python -m pytest -q -n auto --dist loadfile --randomly-seed=17
           --junitxml=diagnostic-evidence/full.xml tests
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           # The `diagnostic-` prefix is what the summary uses to ignore this evidence.
           name: diagnostic-${{ matrix.id }}
