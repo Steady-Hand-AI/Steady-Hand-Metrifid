@@ -98,24 +98,6 @@ def compare_configuration_file(config_path: str | Path) -> ComparisonRunResult:
     return _run_comparison(config_path, None)
 
 
-def _compare_configuration_file_with_candidate_timestep(
-    config_path: str | Path,
-    candidate_step_dt: ExactRational,
-) -> ComparisonRunResult:
-    """Run one comparison whose candidate role is stepped at `candidate_step_dt`.
-
-    This is the private seam the timestep audit uses so both roles compile the exact admitted
-    user model. MuJoCo documents `option` as mapping to `mjModel.opt`: it is runtime simulation
-    state that does not affect compilation, so only the candidate model's `opt.timestep` is
-    assigned and nothing is serialized, rewritten, or copied.
-
-    It is deliberately private: no `__all__` entry, no package export, no CLI argument, and no
-    public schema. It fails closed when the requested timestep is not the configuration's own
-    declared candidate timestep, or when the two roles are not the same source model.
-    """
-    return _run_comparison(config_path, candidate_step_dt)
-
-
 def _compare_into_owned_output(
     *,
     config_path: Path,

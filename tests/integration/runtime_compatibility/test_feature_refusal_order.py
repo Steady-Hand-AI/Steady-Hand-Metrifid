@@ -79,6 +79,7 @@ def _history_model() -> tuple[object, bool]:
                 nu=0,
                 nplugin=0,
                 npluginstate=0,
+                tex_adr=[],
                 body_plugin=[],
                 geom_plugin=[],
                 actuator_plugin=[],

@@ -94,8 +94,7 @@ admission, on Linux, on macOS, and on Windows. Commands that compile or step a m
 gate, and native Windows is unsupported for them; WSL is the documented route. Those commands use
 the exact admitted package/native runtime and bind its identity to evidence. On platforms that
 carry no packaging ceiling, the resolver-selected newest stable MuJoCo is the primary development
-and release profile—3.12.0 for the frozen 2026-08-22 snapshot—while exact retained older profiles
-remain compatibility-tested.
+and release profile—3.17.0—while exact retained older profiles remain compatibility-tested.
 
 Package resolution carries one platform exception. Upstream publishes no Intel macOS wheel for
 MuJoCo 3.11 or newer, so the declared dependency is `mujoco>=3.9,<3.11` on Darwin `x86_64` and

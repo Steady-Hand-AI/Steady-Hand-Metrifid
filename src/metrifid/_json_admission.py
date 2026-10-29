@@ -37,7 +37,6 @@ __all__ = [
     "bounded_strict_json_loads",
     "enforce_json_structure",
     "read_bounded_regular_file",
-    "read_bounded_strict_json",
 ]
 
 _MIB = 1024 * 1024
@@ -159,26 +158,6 @@ def bounded_strict_json_loads(data: bytes | str, limits: JsonAdmissionLimits) ->
         raise JsonAdmissionError(f"strict JSON admission failed: {exc}") from exc
     enforce_json_structure(parsed, limits)
     return parsed
-
-
-def read_bounded_strict_json(
-    path: str | os.PathLike[str], limits: JsonAdmissionLimits
-) -> CanonicalValue:
-    """Read one regular file and admit it as bounded strict JSON.
-
-    Args:
-        path: Filesystem path to admit.
-        limits: The exact bounds to enforce.
-
-    Returns:
-        The validated canonical value.
-
-    Raises:
-        JsonAdmissionError: The file or its content failed admission.
-    """
-    if not isinstance(limits, JsonAdmissionLimits):
-        raise TypeError("limits must be a JsonAdmissionLimits")
-    return bounded_strict_json_loads(read_bounded_regular_file(path, limits.max_bytes), limits)
 
 
 def _is_regular(mode: int) -> bool:

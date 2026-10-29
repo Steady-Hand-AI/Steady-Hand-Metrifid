@@ -163,16 +163,69 @@ def _parser() -> argparse.ArgumentParser:
         "show",
         help="read one saved certification or model release receipt",
         description=(
-            "Validate one saved Metrifid receipt and report what it recorded. Nothing is "
+            "Validate one saved certification or model release receipt and report what it recorded. "
+            "Use repair show for repair records. Nothing is "
             "compiled, no output is written, and the recorded outcome is preserved. Reading a "
             "receipt needs no MuJoCo, so a retained result stays readable elsewhere. Exit 0 "
             "means the receipt was read, not that the two models were identical: the recorded "
             "status is reported in the result."
         ),
     )
-    show.add_argument("receipt", metavar="RECEIPT", help="path to a saved Metrifid receipt")
+    show.add_argument(
+        "receipt", metavar="RECEIPT", help="path to a saved certification or model release receipt"
+    )
     _add_result_options(show)
+    _add_repair_parser(subcommands)
     return parser
+
+
+def _add_repair_parser(subcommands: argparse._SubParsersAction[_Parser]) -> None:
+    """Add the independent decimal-valued repair workflow without native imports."""
+    repair = subcommands.add_parser(
+        "repair",
+        help="repair, read and independently replay a supported planar controller",
+        description="Bounded planar controller repair and retained results. Simulation only.",
+    )
+    operations = repair.add_subparsers(dest="repair_operation", required=True)
+    descriptions = {
+        "run": "Repair one explicit controller and save a new result bundle. Simulation only.",
+        "show": "Read a saved repair or replay result without native libraries or simulation.",
+        "replay": "Independently evaluate a saved run's controller without optimization. Simulation only.",
+    }
+    for operation, description in descriptions.items():
+        command = operations.add_parser(operation, help=description, description=description)
+        command.add_argument(
+            "repair_source",
+            metavar={"run": "REQUEST.json", "show": "RESULT.json", "replay": "RUN_DIR"}[operation],
+            help={
+                "run": "request JSON file",
+                "show": "repair.json or replay.json",
+                "replay": "saved run directory",
+            }[operation],
+        )
+        if operation != "show":
+            command.add_argument(
+                "--output", required=True, help="new output directory under an existing real parent"
+            )
+        command.add_argument(
+            "--json",
+            action="store_true",
+            dest="as_json",
+            help="emit one metrifid.repair_summary JSON document",
+        )
+
+
+def _run_repair(arguments: argparse.Namespace) -> int:
+    """Dispatch parsed repair commands before the older operational/result contracts."""
+    from .repair._presentation import execute_cli
+
+    return execute_cli(
+        arguments.repair_operation,
+        arguments.repair_source,
+        getattr(arguments, "output", None),
+        as_json=arguments.as_json,
+        write=_write_stdout,
+    )
 
 
 def _add_result_options(parser: argparse.ArgumentParser) -> None:
@@ -200,6 +253,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         # when it never parsed, so a caller reading stdout can parse an ordinary usage error.
         _write_requested_failure_result(argv, failure)
         return _emit_failure(failure)
+    if arguments.command == "repair":
+        return _run_repair(arguments)
     if arguments.command not in _OPERATIONS:
         return _emit_failure(_invocation_failure("unknown command", "compare"))
     return _dispatch(arguments)

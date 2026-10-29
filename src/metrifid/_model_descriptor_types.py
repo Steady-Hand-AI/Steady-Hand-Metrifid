@@ -4,7 +4,6 @@ These describe what a compiled model *is* - its joints, actuators, transmission 
 activation layout - independently of how it was compiled. ``_model_admission`` re-exports them.
 """
 
-# Keep the baseline import statement order for rename-normalized AST identity.
 from __future__ import annotations  # noqa: I001
 
 from collections.abc import Sequence

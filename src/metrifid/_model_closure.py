@@ -1,6 +1,5 @@
 """Conservative full-root model closure measurement and immutable snapshotting."""
 
-# Keep the baseline import statement order for rename-normalized AST identity.
 from __future__ import annotations  # noqa: I001
 
 import hashlib

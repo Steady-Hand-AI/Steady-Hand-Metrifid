@@ -353,6 +353,7 @@ def _admission_model(**updates: Any) -> SimpleNamespace:
     values: dict[str, Any] = {
         "nplugin": 0,
         "npluginstate": 0,
+        "tex_adr": [],
         "body_plugin": None,
         "geom_plugin": None,
         "actuator_plugin": None,

@@ -1,8 +1,8 @@
-"""Private data-only decision core for the selected native-upgrade method.
+"""Data-only native Runtime Review decisions using a conditional tail envelope.
 
-This module implements only the preregistered ``CONDITIONAL_TAIL_ENVELOPE`` winner.  It accepts
-already-admitted semantic evidence and performs no model execution, file access, environment
-inspection, networking, or subprocess work.
+The ``CONDITIONAL_TAIL_ENVELOPE`` method accepts already-admitted semantic evidence
+and performs no model execution, file access, environment inspection, networking,
+or subprocess work.
 """
 
 from __future__ import annotations

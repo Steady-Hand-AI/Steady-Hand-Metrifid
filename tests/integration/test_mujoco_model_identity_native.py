@@ -215,7 +215,7 @@ def test_compile_error_warning_and_callback_restoration(
     real_class = model_compile.mujoco.MjModel
     real_from_path = real_class.from_xml_path
 
-    def warned(path: str) -> mujoco.MjModel:
+    def warned(path: str, *, vfs: mujoco.MjVfs) -> mujoco.MjModel:
         """Construct the warned fixture used by MuJoCo model identity native scenarios.
 
         Deterministic setup isolates compile error warning and callback restoration without
@@ -224,7 +224,7 @@ def test_compile_error_warning_and_callback_restoration(
         callback = mujoco.get_mju_user_warning()
         assert callback is not None
         callback("captured warning")
-        return real_from_path(path)
+        return real_from_path(path, vfs=vfs)
 
     monkeypatch.setattr(model_compile.mujoco, "MjModel", SimpleNamespace(from_xml_path=warned))
     with pytest.raises(closure.ModelAdmissionRefusal) as exc:
@@ -232,7 +232,7 @@ def test_compile_error_warning_and_callback_restoration(
     assert _refusal_reason(exc) is OperationalReasonCode.CANDIDATE_MODEL_COMPILE_WARNING
     assert mujoco.get_mju_user_warning() is None
 
-    def failed(path: str) -> mujoco.MjModel:
+    def failed(path: str, *, vfs: mujoco.MjVfs) -> mujoco.MjModel:
         """Inject the deterministic failed branch required by this scenario.
 
         The MuJoCo model identity native test can assert failure delivery for compile error

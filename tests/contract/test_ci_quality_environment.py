@@ -4,8 +4,8 @@ The workflow is frozen for this release, so its raw-byte SHA-256 is the contract
 changes fails here before anything can normalize or overlook it. A digest constrains the file that
 is admitted, not how a hosted runner behaves.
 
-The remaining workflow assertions are diagnostic. They name individual workflow properties and
-decide nothing.
+Most remaining workflow assertions are diagnostic. The installed repair step additionally runs
+with controlled subprocess work to prove its invocation and failure propagation.
 
 The evidence helper is checked semantically, because the values it judges are produced at runtime
 and cannot be frozen.
@@ -36,7 +36,7 @@ _VALIDATOR = _REPOSITORY / ".github/scripts/validate_ci_evidence.py"
 _ACTION = _REPOSITORY / "action.yml"
 
 # The expected digest of the frozen release workflow.
-_FROZEN_WORKFLOW_SHA256 = "af43c36dcb24609d9a221347b321964a7240ff84caca6ce1d87a301bc496e594"
+_FROZEN_WORKFLOW_SHA256 = "e51dcc8e0b11603cb62168aa2e5dbc37e099645c4969995e5c5e3407fda70b1e"
 
 _ALL_JOBS = (
     "build_and_quality",
@@ -364,8 +364,8 @@ def test_no_lane_reintroduces_a_runner_local_mujoco_resolver_override() -> None:
 
     A constraints file, a binary-only pin or an exact MuJoCo pin around the candidate install
     would make the Intel lane green while the published metadata stayed broken for every user.
-    That is the exact failure this release corrects, so the mechanism may not come back under
-    any spelling.
+    The repair example has a separate, guarded venv with its declared supported runtime.
+    Only that exact isolated step is exempt; the candidate's core installation stays unpinned.
     """
     text = _workflow_text()
     for token in (
@@ -378,18 +378,63 @@ def test_no_lane_reintroduces_a_runner_local_mujoco_resolver_override() -> None:
     ):
         assert token not in text, token
     assert "mujoco" not in _QUALITY_CONSTRAINTS.read_text(encoding="utf-8")
-    # The two lanes that deliberately install an exact floor or an exact retained profile are
-    # named; every other job must leave the resolver alone. The pattern matches a version pin,
-    # not any Python comparison that happens to mention MuJoCo: the required lane legitimately
-    # compares its install report against the imported ``mujoco.__version__``.
+    # Exact floor/retained profiles and the separate repair venv are deliberate. Everything
+    # else must leave the core resolver alone, including all other matrix-lane steps.
+    # The pattern ignores legitimate comparisons with imported ``mujoco.__version__``.
     pin = re.compile(r"(?<![\w.])mujoco\s*==\s*[\"']?[0-9]", re.IGNORECASE)
+    repair = _repair_step()
+    assert _step_property(repair, "if") == "matrix.id == 'linux_x64_py313'"
+    assert _step_property(repair, "continue-on-error") is None
+    active = _active_lines(repair)
+    for required in (
+        'for mujoco_version in ("3.16.0", "3.17.0"):',
+        'venv = scratch / f"venv-{mujoco_version}"',
+        'python = venv / "bin/python"',
+        'subprocess.run([sys.executable, "-m", "venv", str(venv)], env=environment, check=True)',
+        '[str(python), "-m", "pip", "install", str(wheel), f"mujoco=={mujoco_version}", "numpy==2.5.4"],',
+    ):
+        assert required in active, required
+    assert len(pin.findall(repair)) == 0
+    assert active.count('for mujoco_version in ("3.16.0", "3.17.0"):') == 1
     for name in ("build_and_quality", "matrix_lane", "sdist_install_lane"):
         job = _job(text, name)
+        if name == "matrix_lane":
+            assert job.count(repair) == 1
+            job = job.replace(repair, "", 1)
         assert pin.search(job) is None, (name, pin.search(job))
     # Controls: the pattern must ignore the legitimate comparison and still catch a real pin.
     assert pin.search("assert reported_mujoco == mujoco.__version__") is None
     assert pin.search('printf "mujoco==3.10.0"') is not None
     assert pin.search("pip install mujoco==3.9.0") is not None
+
+
+@pytest.mark.parametrize(
+    ("before", "after"),
+    [
+        (
+            "python -m pip install --report lane-evidence/install_report.json",
+            "python -m pip install mujoco==3.16.0 --report lane-evidence/install_report.json",
+        ),
+        ("if: matrix.id == 'linux_x64_py313'", "if: matrix.id == 'macos_x64_py312'"),
+        ('python = venv / "bin/python"', "python = pathlib.Path(sys.executable)"),
+        (
+            'subprocess.run([sys.executable, "-m", "venv", str(venv)], env=environment, check=True)',
+            '# subprocess.run([sys.executable, "-m", "venv", str(venv)], env=environment, check=True)',
+        ),
+        (
+            '[str(python), "-m", "pip", "install", str(wheel), f"mujoco=={mujoco_version}", "numpy==2.5.4"],',
+            '[sys.executable, "-m", "pip", "install", str(wheel), f"mujoco=={mujoco_version}", "numpy==2.5.4"],',
+        ),
+    ],
+)
+def test_repair_exception_cannot_hide_a_core_resolver_override(monkeypatch, before, after):
+    """The narrow exception cannot admit core pins or repair work in the core interpreter."""
+    original = _workflow_text()
+    assert before in original
+    mutated = original.replace(before, after, 1)
+    monkeypatch.setattr(sys.modules[__name__], "_workflow_text", lambda: mutated)
+    with pytest.raises(AssertionError):
+        test_no_lane_reintroduces_a_runner_local_mujoco_resolver_override()
 
 
 def test_the_required_intel_lane_installs_the_candidate_wheel_ordinarily() -> None:
@@ -439,6 +484,14 @@ def test_retained_exact_profiles_keep_their_own_boundary() -> None:
     job = _job(_workflow_text(), "retained_compatibility_lane")
     assert 'mujoco: "3.10.0"' in job
     assert 'mujoco: "3.11.0"' in job
+    assert 'role: retained_3_12_0\n            mujoco: "3.12.0"' in job
+    assert {
+        role: want.mujoco_version for role, want in _load_validator().RETAINED_EXPECTATIONS.items()
+    } == {
+        "prior_validated": "3.10.0",
+        "current_validated": "3.11.0",
+        "retained_3_12_0": "3.12.0",
+    }
     assert "retained-evidence/focused.xml" in job
     assert "full.xml tests" not in job
     assert "validate_mujoco_compatibility.py" in job
@@ -2199,3 +2252,184 @@ def test_the_helper_accepts_an_exact_python_version_triplet(
     identity["python_version"] = "3.13.13"
     _write(green_tree / f"lane-{lane}" / "runtime_identity.json", identity)
     assert _validate(validator, green_tree)["original_wheel_sha256"] == _DIGEST
+
+
+# ---- Both installed repair runtimes in the existing supported matrix row ------------------------
+
+_REPAIR_STEP_NAME = "Installed repair journey on the supported runtime"
+
+
+def _repair_step() -> str:
+    """Select the one real repair step using the existing step-boundary reader."""
+    steps = _steps(_job(_workflow_text(), "matrix_lane"))
+    found = [step for step in steps if step.startswith("      - name: " + _REPAIR_STEP_NAME + "\n")]
+    assert len(found) == 1
+    return found[0]
+
+
+def _repair_inline_python() -> str:
+    """Read the one embedded repair block without evaluating the workflow language."""
+    step = _repair_step()
+    start = step.index("          python - <<'PY'\n") + len("          python - <<'PY'\n")
+    body = step[start : step.index("          PY\n", start)]
+    return "\n".join(line[10:] for line in body.splitlines()) + "\n"
+
+
+def test_repair_is_guarded_to_supported_row_before_blocking_evidence() -> None:
+    """The extra runtime leaves every resolver-latest core row and its failure route intact."""
+    matrix = _job(_workflow_text(), "matrix_lane")
+    step = _repair_step()
+    assert _step_property(step, "if") == "matrix.id == 'linux_x64_py313'"
+    assert _step_property(step, "continue-on-error") is None
+    assert matrix.index(_REPAIR_STEP_NAME) < matrix.index("Record blocking lane evidence")
+    assert (
+        '- id: linux_x64_py313\n            runner: ubuntu-24.04\n            python: "3.13"'
+        in matrix
+    )
+    assert "          set -euo pipefail\n" in step
+    assert "matrix_lane" in _load_validator().REQUIRED_UPSTREAM
+
+
+def _repair_ci_fixture(tmp_path: Path) -> Path:
+    """Provide the original wheel and its exact manifest, without installing anything."""
+    artifacts = tmp_path / "release-artifacts"
+    (artifacts / "dist").mkdir(parents=True)
+    wheel = artifacts / "dist" / _CANDIDATE_WHEEL
+    wheel.write_bytes(b"original wheel fixture")
+    manifest = {
+        "wheel": {"filename": wheel.name, "sha256": hashlib.sha256(wheel.read_bytes()).hexdigest()}
+    }
+    (artifacts / "original_manifest.json").write_text(json.dumps(manifest))
+    (tmp_path / "runner").mkdir()
+    return wheel
+
+
+@pytest.mark.parametrize("failed_call", range(9))
+def test_ci_repair_invocation_and_each_command_failure_matter(tmp_path, monkeypatch, failed_call):
+    """The installed smoke actually runs, and a failed install or smoke cannot be hidden."""
+    wheel = _repair_ci_fixture(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("RUNNER_TEMP", str(tmp_path / "runner"))
+    monkeypatch.setenv("PYTHONPATH", "must-be-cleared")
+    calls = []
+
+    def controlled_run(argv, **kwargs):
+        calls.append((argv, kwargs))
+        code = 37 if len(calls) == failed_call else 0
+        if code and kwargs.get("check"):
+            raise subprocess.CalledProcessError(code, argv)
+        return subprocess.CompletedProcess(argv, code)
+
+    monkeypatch.setattr(subprocess, "run", controlled_run)
+    if failed_call:
+        with pytest.raises(subprocess.CalledProcessError):
+            exec(_repair_inline_python(), {})
+        assert len(calls) == failed_call
+    else:
+        exec(_repair_inline_python(), {})
+        assert len(calls) == 8
+        scratch = tmp_path / "runner/metrifid-repair"
+        for index, version in enumerate(("3.16.0", "3.17.0")):
+            group = calls[index * 4 : (index + 1) * 4]
+            venv = scratch / f"venv-{version}"
+            python = str(venv / "bin/python")
+            assert group[0][0] == [sys.executable, "-m", "venv", str(venv)]
+            assert group[1][0] == [
+                python,
+                "-m",
+                "pip",
+                "install",
+                str(wheel),
+                f"mujoco=={version}",
+                "numpy==2.5.4",
+            ]
+            assert group[2][0] == [python, "-m", "pip", "check"]
+            assert group[3][0] == [
+                python,
+                str(tmp_path / "examples/repair/installed_smoke.py"),
+                "--output",
+                str(scratch / f"journey-{version}"),
+                "--expected-version",
+                _CANDIDATE_VERSION,
+            ]
+            assert group[3][1]["cwd"] == scratch
+            assert all(
+                kwargs["env"]["PATH"].split(os.pathsep)[0] == str(venv / "bin")
+                for _, kwargs in group
+            )
+    assert all(kwargs.get("check") for _, kwargs in calls)
+    assert all("PYTHONPATH" not in kwargs["env"] for _, kwargs in calls)
+
+
+def test_ci_repair_rechecks_original_wheel_before_creating_runtime(tmp_path, monkeypatch):
+    """A changed downloaded artifact cannot reach environment setup or the smoke."""
+    wheel = _repair_ci_fixture(tmp_path)
+    wheel.write_bytes(b"changed wheel")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("RUNNER_TEMP", str(tmp_path / "runner"))
+    calls = []
+    monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs: calls.append(args))
+    with pytest.raises(SystemExit, match="original manifest"):
+        exec(_repair_inline_python(), {})
+    assert calls == []
+
+
+@pytest.mark.parametrize("role", ["prior_validated", "current_validated", "retained_3_12_0"])
+def test_each_retained_profile_is_required(validator, green_tree, role):
+    """Moving the latest profile must not silently discard an older exact runtime."""
+    shutil.rmtree(green_tree / f"retained-{role}")
+    with pytest.raises(validator.EvidenceError, match="missing retained evidence"):
+        _validate(validator, green_tree)
+
+
+@pytest.mark.parametrize("job", ["matrix_lane", "minimum_dependency_lane", "sdist_install_lane"])
+@pytest.mark.parametrize("exit_code", [0, 37])
+def test_mjb_failures_are_visible_and_preserve_their_exit(tmp_path, job, exit_code):
+    """Execute each actual MJB shell step with a controlled characterization process."""
+    steps = _steps(_job(_workflow_text(), job))
+    step = next(step for step in steps if step.startswith("      - name: MJB characterization"))
+    body = step.split("        run: |\n", 1)[1]
+    script = "\n".join(line[10:] for line in body.splitlines())
+    tools = tmp_path / "tools"
+    tools.mkdir()
+    (tools / "mjb_characterization.py").write_text(
+        "import sys\nprint('characterization stdout')\n"
+        "print('characterization stderr', file=sys.stderr)\n"
+        f"raise SystemExit({exit_code})\n"
+    )
+    binary = tmp_path / "bin"
+    binary.mkdir()
+    (binary / "python").symlink_to(sys.executable)
+    for directory in ("lane-evidence", "sdist-evidence"):
+        (tmp_path / directory).mkdir()
+    completed = subprocess.run(
+        ["bash", "-c", script],
+        cwd=tmp_path,
+        env={**os.environ, "PATH": str(binary) + os.pathsep + os.environ["PATH"]},
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+    assert completed.returncode == exit_code
+    log = next(tmp_path.glob("*-evidence/mjb*.log"))
+    for message in ("characterization stdout", "characterization stderr"):
+        assert message in completed.stdout
+        assert message in log.read_text()
+
+
+def test_diagnostic_uploads_run_after_failure_without_creating_success_records():
+    """Partial logs are retained, while failed work cannot manufacture a passing lane marker."""
+    for job, record in (
+        ("matrix_lane", "Record blocking lane evidence"),
+        ("minimum_dependency_lane", "Record blocking lane evidence"),
+        ("retained_compatibility_lane", "Record retained evidence identity"),
+        ("sdist_install_lane", "Record sdist lane evidence"),
+    ):
+        steps = _steps(_job(_workflow_text(), job))
+        upload = next(step for step in steps if "actions/upload-artifact@" in step)
+        assert _step_property(upload, "if") == "always()"
+        assert _step_property(upload, "continue-on-error") is None
+        marker = next(step for step in steps if step.startswith("      - name: " + record + "\n"))
+        assert _step_property(marker, "if") is None
+        assert _step_property(marker, "continue-on-error") is None

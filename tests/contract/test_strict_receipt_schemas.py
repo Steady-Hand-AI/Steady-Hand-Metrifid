@@ -421,10 +421,6 @@ def test_receipt_hash_requirement_and_private_sequence_guards(green_candidate: A
     with pytest.raises(ValueError, match="receipt_sha256 is required"):
         validate_receipt(unhashed)
 
-    assert schema_primitives._string_sequence(["a", "b"], "values") == ("a", "b")
-    schema_primitives._unique_strings(("a", "b"), "values")
-    with pytest.raises(ValueError, match="duplicates"):
-        schema_primitives._unique_strings(("a", "a"), "values")
     with pytest.raises(TypeError, match="only ModelClosureMember"):
         schema_primitives._require_typed_tuple((object(),), ModelClosureMember, "members")
     with pytest.raises(TypeError, match="must be a tuple"):

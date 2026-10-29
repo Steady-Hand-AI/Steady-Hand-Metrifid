@@ -17,10 +17,12 @@ model.
 
 Project links: [repository](https://github.com/Steady-Hand-AI/Steady-Hand-Metrifid) · [documentation](https://github.com/Steady-Hand-AI/Steady-Hand-Metrifid/blob/main/docs/getting_started.md) · [issues](https://github.com/Steady-Hand-AI/Steady-Hand-Metrifid/issues) · [changelog](https://github.com/Steady-Hand-AI/Steady-Hand-Metrifid/blob/main/CHANGELOG.md) · [security reporting](https://github.com/Steady-Hand-AI/Steady-Hand-Metrifid/security/advisories/new)
 
+Metrifid 0.9.0 also provides [planar controller repair](https://github.com/Steady-Hand-AI/Steady-Hand-Metrifid/blob/main/docs/repair.md): adjust an explicit starting controller, retain its measured result and independently replay it. Qualification is simulation only, for one fixed planar pushing family and the supported runtime.
+
 ## Start with the change you made
 
-You do not need to pick a command from a list to get an answer. Two things change in practice —
-what you model, and what you run it on — and each has one place to start.
+Start with the question you need to answer: whether a model changed, whether a runtime may
+replace another, or whether a supported planar controller can reach its declared target.
 
 ### Your model or asset changed
 
@@ -61,9 +63,34 @@ This creates the fixed twelve native evidence cells through two explicit, alread
 profiles and returns the full-horizon Runtime Review decision. **Metrifid does not discover, install,
 or repair MuJoCo environments** — you prepare the two profiles, and Metrifid measures what they do.
 
+### Your planar controller misses its target
+
+For the fixed `planar_push_timed15_v1` family, supply the lower finger rail, target position,
+target yaw and 15 normalized starting parameters. Bounded coordinate polling adjusts those
+parameters and separately confirms a qualifying controller at both timesteps. It does not edit
+arbitrary MJCF models. An unsuccessful finite search does not prove the task impossible.
+
+Prepare Linux x86_64 with CPython 3.13:
+
+```bash
+python3.13 -m venv .venv-repair
+. .venv-repair/bin/activate
+python -m pip install 'metrifid==0.9.0' 'mujoco==3.17.0' 'numpy==2.5.4'
+metrifid repair --help
+```
+
+MuJoCo 3.16.0 remains supported for repair; use `mujoco==3.16.0` in the same isolated recipe.
+
+Use the [public request example](https://github.com/Steady-Hand-AI/Steady-Hand-Metrifid/blob/main/examples/repair/planar_push.json)
+and the [run, read and replay guide](https://github.com/Steady-Hand-AI/Steady-Hand-Metrifid/blob/main/docs/repair.md).
+Each operation offers human output or `--json`; `repair show` reads saved records without native
+libraries. Repair execution has narrower support than the core model-comparison commands.
+
 ## Follow the evidence
 
-Both routes hand you a receipt that names the next question. Follow the one you actually have:
+For model and runtime comparisons, use the recorded result to choose the next question. For a
+repaired planar controller, use `repair show` to read the result and `repair replay` to evaluate it
+independently. The core comparison routes continue as follows:
 
 | You now know | You still want | Use |
 | --- | --- | --- |
@@ -166,10 +193,10 @@ Named changes (2)
   body link mass: 1.5 -> 2.0
 ```
 
-`metrifid show RECEIPT` reads a retained result back afterwards, including a `certification.json`
-written by `certify`. It imports no MuJoCo and no NumPy, so a retained result stays readable on a
+`metrifid show RECEIPT` reads certification and model-release receipts: `certification.json`
+and `model_release.json`. It imports no MuJoCo and no NumPy, so those receipts stay readable on a
 machine that has neither. Its exit 0 means the receipt was read, not that the two models matched:
-the recorded status is reported inside the result.
+the recorded status is reported inside the result. Repair records use `metrifid repair show`.
 
 Three limits travel with every comparison, and the result states them. It is bound to one recorded
 MuJoCo version, Python build and platform, and says nothing about any other. Its coverage can be
@@ -188,7 +215,7 @@ out the models first, then run the action:
 ```yaml
 - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 - id: certify
-  uses: Steady-Hand-AI/Steady-Hand-Metrifid@0.8.0
+  uses: Steady-Hand-AI/Steady-Hand-Metrifid@0.9.0
   with:
     baseline_mjcf: old/robot.xml
     candidate_mjcf: new/robot.xml
@@ -307,7 +334,7 @@ behavioral claim.
 | --- | --- |
 | [docs/getting_started.md](https://github.com/Steady-Hand-AI/Steady-Hand-Metrifid/blob/main/docs/getting_started.md) | a human-friendly first tour, installation, and documentation map |
 | [docs/capabilities_and_use_cases.md](https://github.com/Steady-Hand-AI/Steady-Hand-Metrifid/blob/main/docs/capabilities_and_use_cases.md) | current capabilities, practical uses, limits, and non-goals |
-| [docs/public_cases.md](https://github.com/Steady-Hand-AI/Steady-Hand-Metrifid/blob/main/docs/public_cases.md) | six complaint-backed public cases and the external Robosuite Jaco study |
+| [docs/public_cases.md](https://github.com/Steady-Hand-AI/Steady-Hand-Metrifid/blob/main/docs/public_cases.md) | six runnable mechanism cases, their provenance and claim boundaries |
 | [docs/reference.md](https://github.com/Steady-Hand-AI/Steady-Hand-Metrifid/blob/main/docs/reference.md) | commands, exits, statuses, schemas, Python API |
 | [`docs/compiled_certification.md`](https://github.com/Steady-Hand-AI/Steady-Hand-Metrifid/blob/main/docs/compiled_certification.md) | the `certify` contract and claim boundary |
 | [`docs/model_closure.md`](https://github.com/Steady-Hand-AI/Steady-Hand-Metrifid/blob/main/docs/model_closure.md) | how the model closure is measured and confined |
@@ -320,11 +347,12 @@ behavioral claim.
 | [docs/sdk.md](https://github.com/Steady-Hand-AI/Steady-Hand-Metrifid/blob/main/docs/sdk.md) | the supported programmatic execution surfaces, including `review_runtime_configuration_file` |
 | [`docs/canonicalization.md`](https://github.com/Steady-Hand-AI/Steady-Hand-Metrifid/blob/main/docs/canonicalization.md) | canonical JSON, exact numbers, self-hashing |
 | [`docs/menagerie_formatter_case.md`](https://github.com/Steady-Hand-AI/Steady-Hand-Metrifid/blob/main/docs/menagerie_formatter_case.md) | a real public case study |
-| [`skills/metrifid/SKILL.md`](https://github.com/Steady-Hand-AI/Steady-Hand-Metrifid/blob/main/skills/metrifid/SKILL.md) | the consumer skill for a coding agent — source only, not in the Python package |
+| [docs/repair.md](https://github.com/Steady-Hand-AI/Steady-Hand-Metrifid/blob/main/docs/repair.md) | planar controller repair, request and saved-record schemas, limits, and independent replay |
 
 ## Requirements
 
-Python 3.11 or newer, with no upper bound and no runtime rejection based on the interpreter name.
+The core model-comparison commands require Python 3.11 or newer, with no upper bound and no
+runtime rejection based on the interpreter name.
 Release evidence currently uses CPython because the MuJoCo binary wheels exercised by the release
 matrix target CPython. Other Python implementations are not claimed as validated without native
 evidence. Runtime admission requires a stable MuJoCo `3.9` or newer and is capability-based, with
@@ -332,15 +360,13 @@ no minor-version ceiling on any platform. Package resolution carries one platfor
 because upstream publishes no Intel macOS wheel for MuJoCo `3.11` or newer, the dependency is
 `mujoco>=3.9,<3.11` on Darwin `x86_64` and `mujoco>=3.9` with no minor ceiling everywhere else.
 That bound is a packaging-resolution fact about upstream wheel availability, not a narrowing of
-what the runtime admits. Exact stable MuJoCo `3.9.0`, `3.10.0`, `3.11.0`, and `3.12.0` profiles are
+what the runtime admits. MuJoCo `3.17.0` is the primary development and release profile on platforms
+without that packaging exception. Exact stable `3.9.0`, `3.10.0`, `3.11.0` and `3.12.0` profiles remain
 retained-validated. A later stable release is admitted only when its Python/native identities agree
 and the requested operation's measured capabilities pass; it is reported as capability-compatible,
-never falsely as validated. On platforms without that packaging exception the newest stable release
-is the primary development and release profile—3.12.0 for the frozen 2026-08-22 snapshot—while the
-exact retained older profiles remain backward-compatibility evidence. NumPy is `>=1.26`, with no
-runtime ceiling and no runtime version gate.
+never falsely as validated. NumPy is `>=1.26`, with no runtime ceiling and no runtime version gate.
 
-Every native command — `certify`, `review-model`, `compare`, `audit-timestep`,
+The core native commands — `certify`, `review-model`, `compare`, `audit-timestep`,
 and `qualify-workload` —
 passes through one shared runtime gate. That gate admits Linux and macOS when the required POSIX
 capabilities are present, and it never inspects the machine architecture: architecture is receipt
@@ -351,6 +377,11 @@ call-graph capabilities use `MUJOCO_RUNTIME_CAPABILITY_MISSING`, and an unrepres
 `MUJOCO_FEATURE_COVERAGE_INCOMPLETE`. In particular, `review-model` requires an exact characterized
 public-field surface, while `certify` may still identify complete MJB bytes on a newer admitted
 runtime. Receipts continue binding exact package, native-library, and installed-distribution hashes.
+
+`repair run` and `repair replay` separately require Linux x86_64, CPython 3.13, MuJoCo 3.16.0 or 3.17.0
+and NumPy 2.5.4. Their fixed family and limits are documented in the repair guide. Help, request
+loading and `repair show` import neither MuJoCo nor NumPy. The broader package dependency markers
+above remain unchanged.
 
 `run-runtime-review` instead measures and admits both explicitly declared external native profiles
 through its fixed preflight collector before invoking the frozen worker in either profile. It does

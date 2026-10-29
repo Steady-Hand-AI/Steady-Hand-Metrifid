@@ -21,7 +21,6 @@ from metrifid._json_admission import (
     bounded_strict_json_loads,
     enforce_json_structure,
     read_bounded_regular_file,
-    read_bounded_strict_json,
 )
 
 
@@ -289,7 +288,9 @@ def test_regular_file_round_trip(tmp_path: Path) -> None:
     """Read and admit an ordinary regular file."""
     path = tmp_path / "config.json"
     path.write_text('{"a": 1}', encoding="utf-8")
-    assert read_bounded_strict_json(path, _ROOMY) == {"a": 1}
+    assert bounded_strict_json_loads(read_bounded_regular_file(path, _ROOMY.max_bytes), _ROOMY) == {
+        "a": 1
+    }
     assert read_bounded_regular_file(path, 1000) == b'{"a": 1}'
 
 

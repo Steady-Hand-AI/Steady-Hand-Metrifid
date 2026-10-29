@@ -731,15 +731,6 @@ def verify_completed_run_record(
     )
 
 
-def verify_owned_runtime_review_run_output(
-    output: OwnedRuntimeReviewRunOutput,
-) -> VerifiedRuntimeReviewRunRecord:
-    """Verify one owner's completed boundary without accepting a partial run as completed."""
-    if not isinstance(output, OwnedRuntimeReviewRunOutput):
-        raise TypeError("output must be an OwnedRuntimeReviewRunOutput")
-    return output.verify_completed_output()
-
-
 def _validate_run_record_document(document: dict[str, CanonicalValue]) -> None:
     """Require the closed completed-record shape, status mapping, order, and self-hash."""
     actual = set(document)
@@ -1447,5 +1438,4 @@ __all__ = [
     "VerifiedRuntimeReviewRunRecord",
     "prepare_runtime_review_run_output",
     "verify_completed_run_record",
-    "verify_owned_runtime_review_run_output",
 ]

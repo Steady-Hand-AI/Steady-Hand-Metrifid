@@ -95,6 +95,19 @@ _MEASURED_ENTRIES: Final = (
         measurement_process_count=2,
         measurements_identical=True,
     ),
+    PublicFieldRegistryCatalogEntry(
+        base_version="3.17.0",
+        full_public_surface_sha256=(
+            "9401bc1a93b7471e5a47c6d020f8a0a6056407634097cb56b0b7ac6273495c31"
+        ),
+        full_public_surface_count=744,
+        comparable_registry_sha256=(
+            "05690cd2be0420b5e71351e7b549b418fa61090b441e6fc17ab0fdb9a0d492c4"
+        ),
+        comparable_registry_count=698,
+        measurement_process_count=2,
+        measurements_identical=True,
+    ),
 )
 
 PUBLIC_FIELD_REGISTRY_CATALOG: Final = MappingProxyType(

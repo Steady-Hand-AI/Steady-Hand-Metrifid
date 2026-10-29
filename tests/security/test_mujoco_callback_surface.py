@@ -93,7 +93,9 @@ try:
     if mode == "both":
         model_compile.discover_snapshot_dependencies = forbidden
         model_compile._require_mjcf_root = forbidden
-        model_compile.mujoco.MjModel = SimpleNamespace(from_xml_path=forbidden)
+        model_compile.mujoco.MjModel = SimpleNamespace(
+            from_xml_path=forbidden, tex_adr=mujoco.MjModel.tex_adr
+        )
     before = [address(mujoco.get_mju_user_malloc()), address(mujoco.get_mju_user_free())]
     try:
         with open_live_model_pair(

@@ -34,7 +34,8 @@ _PROFILE_VERSIONS: Final = {
     "oldest_validated": "3.9.0",
     "prior_validated": "3.10.0",
     "current_validated": "3.11.0",
-    "latest_validated": "3.12.0",
+    "retained_3_12_0": "3.12.0",
+    "latest_validated": "3.17.0",
 }
 _PROFILE_ROLES: Final = tuple(_PROFILE_VERSIONS)
 _EXACT_TUPLE_FIELDS: Final = frozenset(

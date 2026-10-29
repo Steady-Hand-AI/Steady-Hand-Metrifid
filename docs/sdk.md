@@ -1,9 +1,9 @@
 # Python SDK
 
-Metrifid has seven execution entry points, representing six decision types: the two Runtime Review
-routes reach the same migration-envelope decision through the same referee. They are the supported
-programmatic surface, and each does exactly what its CLI command does — the CLI is a thin wrapper
-over them.
+Metrifid's core model and runtime APIs have seven execution entry points, representing six
+decision types: the two Runtime Review routes reach the same migration-envelope decision through
+the same referee. Each core CLI command wraps the corresponding function below. The separate
+[planar repair SDK](#planar-controller-repair) provides its own request, result and file workflows.
 
 ```python
 from metrifid.certify import certify_models, CertifyResult
@@ -23,9 +23,44 @@ Runnable examples for `certify`, `compare`, `audit-timestep`, `qualify-workload`
 Review execution journey live in `examples/sdk/`. The Model Change Gate example lives in
 `examples/model_release/run_example.py`.
 
+## Planar controller repair
+
+The supported repair operations are exported from `metrifid.repair`:
+
+```python
+from metrifid.repair import (
+    load_request,
+    repair_controller,
+    replay_controller,
+    run_request_file,
+    read_result_file,
+    replay_run_directory,
+    WorkflowResult,
+)
+```
+
+`load_request` admits the bounded request without native imports and raises `RepairInputError` for
+invalid input or a read failure. `repair_controller` returns an `EngineResult`;
+`replay_controller` takes a retained engine result and returns a fresh `ReplayResult`, without
+optimization. The file APIs `run_request_file`, `read_result_file` and `replay_run_directory`
+return `WorkflowResult`, whose command status and exit code are distinct from a saved record's
+status and exit code. Reading returns `READ/0` on successful admission even if the saved run did
+not qualify. These APIs do not use the core completed-result/refusal-exception contract below.
+
+Results distinguish confirmed qualification, finite nonqualification, incomplete work, refusal
+and operational error. File publication failure returns `ERROR/70`, no verified result path and
+false command qualification, even if physical evaluation qualified. A retained file alone does
+not establish successful publication.
+
+Importing these public names, loading requests and reading saved results requires neither MuJoCo
+nor NumPy. Repair/replay execution separately requires Linux x86_64, CPython 3.13,
+MuJoCo 3.16.0 or 3.17.0 and NumPy 2.5.4. It adjusts an explicit 15-parameter controller only in the fixed planar pushing family;
+qualification is simulation only. For request fields, limits, outcome types, new output-directory
+rules and runnable SDK usage, see the [repair file workflow](repair.md#python-file-workflow).
+
 ## Two kinds of outcome
 
-Read this once; it applies to all seven operations.
+The following contract applies to the seven core operations listed at the start of this page.
 
 A **completed decision** is a return value. `NOT_CERTIFIED_COMPILED_DIFFERS` is a completed
 decision, not a failure: Metrifid looked, and the artifacts differ. Your code inspects the result.
@@ -48,8 +83,8 @@ that to a strict exit-`70` failure.
 
 ## Native runtime requirement
 
-The five model operations compile a real model, and `compare`, `audit-timestep` and
-`qualify-workload` also step one, so they require the exact supported runtime:
+The five core model operations compile a real model, and `compare`, `audit-timestep` and
+`qualify-workload` also step one. They use the following support envelope:
 
 ```text
 Python language   >= 3.11, with no upper bound and no interpreter-name allowlist
@@ -57,15 +92,15 @@ Operating system  Linux or macOS with the required POSIX descriptor capabilities
 MuJoCo runtime    stable >=3.9, capability-based, no minor-version ceiling anywhere
 MuJoCo package    >=3.9,<3.11 on Darwin x86_64; >=3.9 with no ceiling elsewhere
 MuJoCo identity   package/native base and algorithmic native integer agree
-Validated exact   3.9.0, 3.10.0, 3.11.0, and 3.12.0
+Validated exact   3.9.0, 3.10.0, 3.11.0, 3.12.0, and 3.17.0
 NumPy             >= 1.26, with no runtime upper bound
 ```
 
 Upstream publishes no Intel macOS wheel for MuJoCo 3.11 or newer, so the package requirement is
 bounded on Darwin `x86_64` only; runtime admission is unchanged there. Elsewhere the
-resolver-selected newest stable MuJoCo is the primary development and release profile—3.12.0 for
-the frozen 2026-08-22 snapshot. Exact 3.9.0 is the supported minimum; retained 3.10.0 and 3.11.0
-profiles remain backward-compatibility evidence. SDK results bind the exact admitted runtime bytes.
+resolver-selected newest stable MuJoCo is the primary development and release profile—3.17.0.
+Exact 3.9.0 is the supported minimum; retained 3.10.0, 3.11.0 and 3.12.0 profiles remain
+backward-compatibility evidence. SDK results bind the exact admitted runtime bytes.
 
 Release evidence currently uses CPython because the exercised MuJoCo wheels target CPython. Other
 Python implementations are not claimed as validated, but Metrifid does not refuse solely because of
@@ -74,13 +109,17 @@ The runtime refuses when the minimum language level, required POSIX capabilities
 family, coherent MuJoCo identity, or operation capability surface is not satisfied. A later stable
 profile can be admitted without being labeled validated. A specific claim can still fail closed:
 `review-model` requires an exact cataloged public-field surface, and static/dynamic action contracts
-require representable actuator input/output signatures. Receipt *reading* has no native requirement:
-`metrifid.certify.load_and_validate_certification_receipt` imports and runs without MuJoCo or NumPy
-installed.
+require representable actuator input/output signatures. Certification receipt reading is
+native-free: `metrifid.certify.load_and_validate_certification_receipt` imports and runs without
+MuJoCo or NumPy. The model-release reader and repair reader are also native-free. This is not a
+claim that every SDK receipt-loader import is native-free; the workload-qualification import
+behavior is described in its section below.
 
-Metrifid must also be installed normally. A decision-bearing operation refuses to run from an
-editable install, because every receipt binds the identity of the installed distribution that
-produced it.
+Core receipt-producing operations enforce a normal installed distribution and refuse editable or
+source-tree execution because their receipts bind an installed-code digest. Repair records contain
+the tool version, runtime observations and their documented request/artifact identities, not that
+distribution digest, and do not invoke this core identity gate. Use a normal installed wheel for
+supported repair execution and validation as described in the repair guide.
 
 ## Concurrency
 
@@ -90,8 +129,8 @@ call them reentrantly from inside a Metrifid callback.
 
 ## Output ownership
 
-Each operation publishes into a directory you name, and none of them overwrites an existing entry.
-Every route verifies the published path again after writing, so replacing the directory mid-run
+Each core execution operation publishes into a directory you name, and none overwrites an existing
+entry. Each verifies the published path again after writing, so replacing the directory mid-run
 causes a refusal rather than a result pointing at someone else's bytes.
 
 What the declared root may already be differs by operation, so do not assume one rule:
@@ -365,7 +404,11 @@ Nothing else is public. The strict JSON configuration file is the only supported
 campaign: configuration, probe, workload, cell, group, limitation and cardinality types are internal
 implementation detail, several of their constructors require internal types, and they may change
 without a compatibility guarantee. Importing the submodule performs no filesystem, network, or
-native-runtime work; MuJoCo loads only when one of the six names is first resolved.
+native-runtime work. Resolving `QualificationExitCode`, `QualificationStatus` or
+`WorkloadQualificationOperationError` remains native-free. Resolving `QualificationResult`,
+`qualify_configuration_file` or `load_and_validate_workload_qualification_receipt` loads their
+implementation modules, which also import MuJoCo and NumPy. Resolving a name does not itself run
+a qualification or validate a receipt.
 
 A runnable end-to-end script is [`examples/sdk/workload_qualification_api.py`](../examples/sdk/workload_qualification_api.py).
 

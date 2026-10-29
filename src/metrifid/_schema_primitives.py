@@ -98,11 +98,6 @@ def _sequence(value: object, field: str) -> list[object]:
     return cast(list[object], value)
 
 
-def _string_sequence(value: object, field: str) -> tuple[str, ...]:
-    """Decode a JSON array whose every element is a nonempty string."""
-    return tuple(_nonempty_string(item, field) for item in _sequence(value, field))
-
-
 def _name_sequence(value: object, field: str) -> tuple[str, ...]:
     """Decode a JSON array of nonempty NUL-free UTF-8 semantic names."""
     return tuple(_name(item, field) for item in _sequence(value, field))
@@ -168,14 +163,6 @@ def _sorted_unique_names(names: Sequence[str], field: str) -> None:
     _unique_names(names, field)
     if tuple(names) != tuple(sorted(names)):
         raise ValueError(f"{field} must be sorted by exact Unicode code points")
-
-
-def _unique_strings(values: Sequence[str], field: str) -> None:
-    """Reject empty or duplicate string values in a schema sequence."""
-    for value in values:
-        _nonempty_string(value, field)
-    if len(values) != len(set(values)):
-        raise ValueError(f"{field} must not contain duplicates")
 
 
 def _validate_offsets(

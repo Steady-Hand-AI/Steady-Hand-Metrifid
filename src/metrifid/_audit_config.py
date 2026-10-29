@@ -18,10 +18,8 @@ from ._json_admission import (
     JsonAdmissionError,
     bounded_strict_json_loads,
 )
-from ._model_closure import ModelAdmissionRefusal, measure_model_closure
 from .compare._failure import ComparisonOperationError, operational_error
 from .distribution import installed_distribution_sha256
-from .errors import ReasonRole
 from .json_values import CanonicalValue, ExactRational, canonical_json_bytes
 from .operational import OperationalReasonCode, OperationalToolObservation
 from .version import __version__
@@ -293,22 +291,6 @@ def _rational_primitive(value: ExactRational) -> dict[str, CanonicalValue]:
     return {"numerator": value.numerator, "denominator": value.denominator}
 
 
-def _reference_timestep(
-    source_root: Path, entrypoint: str, tool: OperationalToolObservation
-) -> ExactRational:
-    """Compile the exact admitted entrypoint and read its reference timestep.
-
-    The user's own bytes are compiled directly. Nothing is serialized, rewritten, or copied:
-    an MJCF round trip re-formats float literals and moves compiled inertial and geometric
-    values, which would make the audit report timestep fidelity plus XML canonicalization.
-    """
-    # Local import keeps module import cheap and mirrors the CLI boundary.
-    import mujoco  # type: ignore[import-untyped]
-
-    model = mujoco.MjModel.from_xml_path(str(source_root / entrypoint))
-    return _compiled_timestep(float(model.opt.timestep), tool)
-
-
 def _tree_digest(root: Path) -> str:
     """Deterministic digest over a model tree, used for immutability evidence."""
     members: list[CanonicalValue] = []
@@ -320,30 +302,6 @@ def _tree_digest(root: Path) -> str:
             }
         )
     return hashlib.sha256(canonical_json_bytes(cast(CanonicalValue, members))).hexdigest()
-
-
-def _admit_model_closure(
-    source_root: Path,
-    config: AuditConfig,
-    tool: OperationalToolObservation,
-) -> None:
-    """Admit the declared model root and entrypoint through the accepted model admission measurement.
-
-    An model admission refusal is an audit-level operational failure here: the audit, not the comparison
-    engine, was the caller. Its reason, role, and evidence are preserved verbatim.
-    """
-    try:
-        measure_model_closure(source_root, config.entrypoint, "comparison")
-    except ModelAdmissionRefusal as exc:
-        raise AuditAbort(
-            operational_error(
-                tool=tool,
-                code=exc.reason,
-                role=cast(ReasonRole, exc.role),
-                evidence=cast("Mapping[str, CanonicalValue]", exc.evidence),
-                operation=OPERATION,
-            )
-        ) from exc
 
 
 def _require_output_outside_model_root(

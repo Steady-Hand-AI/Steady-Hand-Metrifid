@@ -200,3 +200,63 @@ def test_ball_joint_is_refused_before_rollout_with_existing_reason() -> None:
     assert error.value.reason is OperationalReasonCode.TOLERANCE_UNIT_MISMATCH
     assert error.value.evidence["object_name"] == "ball"
     assert error.value.evidence["issue"] == "monitoring_supports_hinge_and_slide_only"
+
+
+@pytest.mark.parametrize(
+    ("warning_role", "expected_status", "expected_reason"),
+    [
+        (None, "NO_MATERIAL_DIFFERENCE_ON_DECLARED_WORKLOAD", None),
+        ("baseline", "COVERAGE_INSUFFICIENT", ReasonCode.BASELINE_MUJOCO_WARNING),
+        ("candidate", "MATERIAL_BEHAVIOR_CHANGE", ReasonCode.CANDIDATE_MUJOCO_WARNING),
+    ],
+)
+def test_captured_warning_preserves_role_decision_and_serialized_evidence(
+    warning_role, expected_status, expected_reason
+):
+    """Warnings stay decision-bearing even when both complete motion traces agree."""
+    traces = {
+        role: role_trace(
+            role,
+            qpos_rows=[[0.0, 0.0]] * 3,
+            qvel_rows=[[0.0, 0.0]] * 3,
+            warning_boundary=1 if warning_role == role else None,
+        )
+        for role in ("baseline", "candidate")
+    }
+    result = evaluate_role_pair(
+        baseline=_repeat(traces["baseline"]),
+        candidate=_repeat(traces["candidate"]),
+        joints=aligned_joints(),
+        monitored_joints=(
+            MonitoredJoint(
+                "hinge",
+                "hinge",
+                {
+                    "angle_rad": ExactRational(1, 1000),
+                    "angular_velocity_rad_s": ExactRational(1, 8),
+                },
+            ),
+        ),
+        time_grid=time_grid(),
+    )
+    assert derive_comparison_status(result.reasons).value == expected_status
+    assert result.first_crossing is None
+    if warning_role is None:
+        assert result.reasons == ()
+        assert all(result.numerical_evidence[role]["first_warning"] is None for role in traces)
+    else:
+        warning = {"warning_index": 0, "number": 1, "lastinfo": 7}
+        assert [reason.code for reason in result.reasons] == [expected_reason]
+        reason = result.reasons[0]
+        assert reason.role == warning_role
+        assert reason.boundary_index == 1
+        assert reason.to_primitive()["evidence"] == {"warnings": [warning]}
+        assert result.numerical_evidence[warning_role]["first_warning"] == {
+            "boundary_index": 1,
+            "warnings": [warning],
+        }
+        assert traces[warning_role].signature_primitive()["warning_snapshots"] == [
+            [],
+            [warning],
+            [],
+        ]

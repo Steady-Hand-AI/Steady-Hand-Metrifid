@@ -36,7 +36,6 @@ from metrifid.runtime_review._execution_output import (
     RuntimeReviewRunOutputError,
     prepare_runtime_review_run_output,
     verify_completed_run_record,
-    verify_owned_runtime_review_run_output,
 )
 
 _ROLES = ("baseline", "candidate")
@@ -393,7 +392,7 @@ def test_partial_run_never_publishes_completed_record(tmp_path: Path) -> None:
         )
         assert retained.exit_code == 2
         with pytest.raises(RuntimeReviewRunOutputError, match="partial run"):
-            verify_owned_runtime_review_run_output(output)
+            output.verify_completed_output()
     assert output.root.is_dir()
     assert not (output.root / COMPLETED_RUN_RECORD_LOCATOR).exists()
 
@@ -406,7 +405,7 @@ def test_completed_run_record_is_self_hashed_and_replayable(
     with output:
         published = output.publish_completed_run_record(record)
         validate_self_hash(published.document, "run_sha256")
-        replayed = verify_owned_runtime_review_run_output(output)
+        replayed = output.verify_completed_output()
         assert replayed.run_sha256 == published.run_sha256
         assert replayed.file_sha256 == published.file_sha256
         assert not (output.root / ".runtime_review_run.json.staging").exists()
@@ -422,7 +421,7 @@ def test_role_based_completed_run_record_replays_every_identity_binding(
 
     with output:
         published = output.publish_completed_run_record(record)
-        replayed = verify_owned_runtime_review_run_output(output)
+        replayed = output.verify_completed_output()
 
     assert published.document["schema_version"] == 2
     assert replayed.run_sha256 == published.run_sha256
@@ -454,7 +453,7 @@ def test_role_based_completed_run_replays_finite_manifest_echo_decimals(
 
     with output:
         published = output.publish_completed_run_record(record)
-        replayed = verify_owned_runtime_review_run_output(output)
+        replayed = output.verify_completed_output()
     standalone = verify_completed_run_record(output.completed_run_record, output_root=output.root)
 
     assert replayed.run_sha256 == published.run_sha256

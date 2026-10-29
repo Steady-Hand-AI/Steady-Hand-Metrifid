@@ -96,54 +96,6 @@ Origin: [robosuite#808](https://github.com/ARISE-Initiative/robosuite/issues/808
 The independent control reads the compiled sensor object IDs and confirms the baseline sensor is
 attached to the sensor frame while the candidate is attached to the grip frame.
 
-## External Robosuite Jaco study
-
-The complaint that motivated the owned sensor-attachment analogue is about a real published asset, so
-the asset itself was measured directly at one pinned commit. This section reports that study; it is
-separate from the six owned cases and makes no claim about them.
-
-```text
-source                 https://github.com/ARISE-Initiative/robosuite.git
-pinned commit          aaa8b9b214ce8e77e82926d677b4d61d55e577ab
-asset                  robosuite/models/assets/grippers/jaco_three_finger_gripper.xml
-acquisition_status     ACQUIRED_EXACT_COMMIT
-execution_status       COMPLETE
-reproduction_status    REPRODUCED_ON_CURRENT_RUNTIME
-patch_effect_status    REDUCED_BELOW_THRESHOLD
-```
-
-The asset was fetched at the exact pinned commit, every copied byte was proved equal to
-`git show HEAD:<path>`, and the candidate was produced by two byte-only attribute replacements that
-reverse exactly to the original file. All four meshes are byte-identical between the two roles.
-
-Measured on MuJoCo 3.12.0 after `mj_resetData` and `mj_forward`, with a threshold of `1e9`
-preregistered before any measurement was taken:
-
-| role | force max abs | torque max abs | combined max abs |
-| --- | --- | --- | --- |
-| original | `5.244206916606112e+17` | `3.747543944134764e+16` | `5.244206916606112e+17` |
-| candidate | `0.0` | `0.0` | `0.0` |
-
-Run through the same Certify/Review journey as the owned cases, the external pair produces exactly
-one changed compiled public field — `sensor_objid` — which is the same compiled signature the owned
-sensor-attachment analogue produces:
-
-```text
-certify           NOT_CERTIFIED_COMPILED_DIFFERS   exit 40
-discovery         REVIEW_REQUIRED                  exit 40
-declared review   WITHIN_DECLARED_POLICY           exit  0
-```
-
-Retained evidence, including the exact source closure, the license, all three receipts, and the
-complete status record, is at `evidence/external_jaco_sensor/` in the return archive, with the
-status object at `evidence/external_jaco_sensor/external_jaco_status.json`. The network checkout was
-removed before those receipts were independently replayed.
-
-This is a static measurement of one published asset at one commit on one runtime. It is not a
-reproduction of any downstream simulation or task, it claims no upstream endorsement, review, or
-acknowledgement, and the byte-only candidate edit is a demonstration of one attribution mechanism
-rather than a recommended upstream fix.
-
 ## How to interpret the decisions
 
 ```text
@@ -169,7 +121,5 @@ runs with those exact changes declared and bound to the candidate artifact.
   Neither steps a simulation.
 - The generated declared policies demonstrate the two-pass mechanism. They are not maintainer
   judgment and confer no release authority.
-- The external study measured one published asset at one pinned commit on one runtime. It does not
-  claim upstream endorsement and is not a reproduction of any downstream task.
 - Referenced public issues are the origin of each mechanism, not the source of any file in this
   repository.

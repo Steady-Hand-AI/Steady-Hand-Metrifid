@@ -152,7 +152,7 @@ def _other_cataloged_base_version(current: str, *, distinct_tuple: bool) -> str:
     """Select another characterized version, optionally requiring a different tuple."""
     current_entry = characterized_registry(current)
     assert current_entry is not None
-    for candidate in ("3.9.0", "3.10.0", "3.11.0", "3.12.0"):
+    for candidate in ("3.9.0", "3.10.0", "3.11.0", "3.12.0", "3.17.0"):
         entry = characterized_registry(candidate)
         assert entry is not None
         tuple_differs = (

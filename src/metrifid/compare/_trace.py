@@ -110,11 +110,6 @@ class RoleTrace:
             and self.initial_state_preserved
         )
 
-    @property
-    def has_warning(self) -> bool:
-        """Return whether any captured MuJoCo warning counter is nonzero."""
-        return any(snapshot for snapshot in self.warning_snapshots)
-
     def signature_sha256(self) -> str:
         """Hash every decision-bearing trace field using exact array bytes."""
         return canonical_sha256(self.signature_primitive())

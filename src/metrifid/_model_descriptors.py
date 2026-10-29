@@ -1,6 +1,5 @@
 """Import surface for compiled-model descriptor identities."""
 
-# Keep the baseline import statement order for rename-normalized AST identity.
 from ._model_descriptor_builders import (  # noqa: I001
     _actuator_descriptors as _actuator_descriptors,
 )

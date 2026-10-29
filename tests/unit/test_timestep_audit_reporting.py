@@ -566,42 +566,45 @@ def test_audit_markdown_is_byte_deterministic() -> None:
     assert canonical_json_bytes(value) == canonical_json_bytes(aggregate(evidence_rows()))
 
 
-def test_private_seam_applies_the_candidate_timestep_to_the_same_source_model(
+def test_live_audit_applies_the_candidate_timestep_to_the_same_source_model(
     tmp_path: Path,
 ) -> None:
-    """Both roles are the identical admitted model; only the candidate timestep differs."""
-    from metrifid.compare._orchestrator import (
-        _compare_configuration_file_with_candidate_timestep,
-    )
+    """The live audit compares the same admitted model without generating a retimed model."""
+    config = confinement_case(tmp_path, "robot.xml", "out")
+    primitive = json.loads(config.read_text(encoding="utf-8"))
+    primitive["candidate_step_dts"] = ["0.005"]
+    config.write_text(json.dumps(primitive), encoding="utf-8")
+    model_before = _tree_digest(tmp_path / "model")
 
-    config = comparison_case(tmp_path, "0.001", "0.005")
-    result = _compare_configuration_file_with_candidate_timestep(config, ExactRational(1, 200))
+    result = audit_configuration_file(config)
 
-    primitive = result.receipt.to_primitive()
-    inputs = primitive["inputs"]
+    candidates = result.aggregate["candidates"]
+    assert len(candidates) == 1
+    comparison_path = result.audit_json.parent / candidates[0]["comparison_json"]
+    receipt = json.loads(comparison_path.read_text(encoding="utf-8"))
+    inputs = receipt["inputs"]
     assert inputs["baseline_model_closure_sha256"] == inputs["candidate_model_closure_sha256"]
-    assert primitive["model_closures"]["baseline"] == primitive["model_closures"]["candidate"]
-    assert primitive["time"]["baseline_step_dt"] == {"numerator": 1, "denominator": 1000}
-    assert primitive["time"]["candidate_step_dt"] == {"numerator": 1, "denominator": 200}
-    # No model file was generated anywhere under the admitted output directory.
-    output_root = Path(primitive["time"] and str(tmp_path / "out"))
-    assert [p.name for p in output_root.rglob("*") if p.suffix in {".xml", ".mjb"}] == []
+    assert receipt["model_closures"]["baseline"] == receipt["model_closures"]["candidate"]
+    assert receipt["time"]["baseline_step_dt"] == {"numerator": 1, "denominator": 1000}
+    assert receipt["time"]["candidate_step_dt"] == {"numerator": 1, "denominator": 200}
+    assert _tree_digest(tmp_path / "model") == model_before
+    assert [
+        path.name for path in result.audit_json.parent.rglob("*") if path.suffix in {".xml", ".mjb"}
+    ] == []
 
 
-def test_private_seam_refuses_a_timestep_the_configuration_did_not_declare(tmp_path: Path) -> None:
-    """The override may only restate the declared candidate timestep, and fails before output."""
-    from metrifid.compare._orchestrator import (
-        _compare_configuration_file_with_candidate_timestep,
-    )
+def test_live_override_validation_refuses_an_undeclared_timestep_before_output(
+    tmp_path: Path,
+) -> None:
+    """The audit's live validator admits only its configuration's declared candidate timestep."""
+    from metrifid.compare._orchestrator import _validate_candidate_override
+    from metrifid.schemas import ComparisonConfig
 
-    config = comparison_case(tmp_path, "0.001", "0.005")
-    with pytest.raises(ComparisonOperationError) as exc:
-        _compare_configuration_file_with_candidate_timestep(config, ExactRational(1, 25))
-
-    failure = exc.value.failure
-    assert failure.reason.code is OperationalReasonCode.INTERNAL_INVARIANT_FAILED
-    assert failure.operation == "compare"
-    # It failed closed before the output directory or any replay object existed.
+    config_path = comparison_case(tmp_path, "0.001", "0.005")
+    config = ComparisonConfig.from_primitive(json.loads(config_path.read_text(encoding="utf-8")))
+    assert _validate_candidate_override(config, ExactRational(1, 200)) is None
+    with pytest.raises(ValueError, match="does not equal the declared candidate timestep"):
+        _validate_candidate_override(config, ExactRational(1, 25))
     assert not (tmp_path / "out").exists()
 
 

@@ -52,13 +52,26 @@ _CATALOG_CASES = (
         "23bb9b012fe1b838e33ba50848c35afa6d9ac5e76a15bc8e679ad46233c783cd",
         699,
     ),
+    (
+        "3.17.0",
+        "9401bc1a93b7471e5a47c6d020f8a0a6056407634097cb56b0b7ac6273495c31",
+        744,
+        "05690cd2be0420b5e71351e7b549b418fa61090b441e6fc17ab0fdb9a0d492c4",
+        698,
+    ),
 )
 
 
 @pytest.mark.parametrize(
     ("base_version", "surface_sha256", "surface_count", "registry_sha256", "registry_count"),
     _CATALOG_CASES,
-    ids=("oldest_validated", "prior_validated", "current_validated", "latest_validated"),
+    ids=(
+        "oldest_validated",
+        "prior_validated",
+        "current_validated",
+        "retained_3_12_0",
+        "latest_validated",
+    ),
 )
 def test_catalog_retains_independently_repeated_surface_identities(
     base_version: str,
